@@ -1,11 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   attribute,
   HEAVY_MEMORY_SHARE,
   HEAVY_SCANS,
+  type Listing,
   PAGE_BYTES,
   type ProcInfo,
   parseAgentId,
@@ -376,14 +377,26 @@ describe("trackSessions", () => {
     expect(heavy()).toBe(true);
   });
 
-  it("is unsupported for good when processes cannot be listed from the start", () => {
+  it("has no sessions until a scan has worked, then recovers", () => {
     let listable = false;
     const tracker = trackSessions(() => (listable ? [proc(1, 0, "a1", 0)] : null), 0);
-    tracker.update(SCAN_EVERY_MS);
     expect(tracker.read(GIB)).toEqual({ sessions: null, other: { cores: 0, rss: 0 } });
-    listable = true;
-    tracker.update(2 * SCAN_EVERY_MS);
+    tracker.update(SCAN_EVERY_MS);
     expect(tracker.read(GIB).sessions).toBeNull();
+    listable = true;
+    tracker.update(2 * SCAN_EVERY_MS); // the baseline
+    expect(tracker.read(GIB).sessions).toEqual([]);
+    tracker.update(3 * SCAN_EVERY_MS);
+    expect(tracker.read(GIB).sessions).toHaveLength(1);
+  });
+
+  it("does not retry a failing lister on every tick", () => {
+    const scan = vi.fn(() => null);
+    const tracker = trackSessions(scan, 0);
+    for (let at = 1000; at < SCAN_EVERY_MS; at += 1000) tracker.update(at);
+    expect(scan).toHaveBeenCalledTimes(1);
+    tracker.update(SCAN_EVERY_MS);
+    expect(scan).toHaveBeenCalledTimes(2);
   });
 
   it("keeps its readings through one failed scan and measures the longer gap on recovery", () => {
@@ -403,13 +416,46 @@ describe("trackSessions", () => {
     expect(tracker.read(GIB).sessions?.[0]?.cores).toBeCloseTo(1);
   });
 
-  it("goes quiet, not unsupported, when scans keep failing", () => {
+  it("becomes unavailable, never an empty list, when scans keep failing, and recovers", () => {
     let fail = false;
     const tracker = trackSessions(() => (fail ? null : [proc(1, 0, "a1", 0)]), 0);
     tracker.update(10_000);
     expect(tracker.read(GIB).sessions).toHaveLength(1);
     fail = true;
     for (let n = 2; n <= 1 + HEAVY_SCANS; n++) tracker.update(n * 10_000);
+    expect(tracker.read(GIB).sessions).toBeNull();
+    fail = false;
+    tracker.update(10 * SCAN_EVERY_MS);
+    expect(tracker.read(GIB).sessions).toHaveLength(1);
+  });
+
+  it("retries a lister that keeps failing ever more slowly, up to a cap", () => {
+    const scan = vi.fn(() => null);
+    const tracker = trackSessions(scan, 0);
+    let at = 0;
+    const calls: number[] = [];
+    for (let tick = 0; tick < 400; tick++) {
+      at += 2000;
+      const before = scan.mock.calls.length;
+      tracker.update(at);
+      if (scan.mock.calls.length > before) calls.push(at);
+    }
+    const gaps = calls.slice(1).map((time, index) => time - (calls[index] ?? 0));
+    // The first three failures are retried at the normal pace, then 20 s, 40 s, 80 s, 160 s, and
+    // 5 minutes at most.
+    expect(gaps.slice(0, 6)).toEqual([10_000, 20_000, 40_000, 80_000, 160_000, 300_000]);
+    expect(Math.max(...gaps)).toBe(300_000);
+  });
+
+  it("survives a lister that throws", async () => {
+    let throws = true;
+    const tracker = trackSessions(() => {
+      if (throws) throw new Error("boom");
+      return [proc(1, 0, "a1", 0)];
+    }, 0);
+    expect(tracker.read(GIB).sessions).toBeNull();
+    throws = false;
+    tracker.update(SCAN_EVERY_MS);
     expect(tracker.read(GIB).sessions).toEqual([]);
   });
 
@@ -453,5 +499,80 @@ describe("trackSessions", () => {
       "small-cpu-big-mem",
       "small-cpu-small-mem",
     ]);
+  });
+
+  describe("with a lister that takes time", () => {
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    /** A lister whose every call stays pending until it is released with a result. */
+    function slow() {
+      const calls: Array<(procs: ProcInfo[] | Listing | null | Error) => void> = [];
+      const scan = vi.fn(() => {
+        const { promise, resolve, reject } = Promise.withResolvers<ProcInfo[] | Listing | null>();
+        calls.push((result) => (result instanceof Error ? reject(result) : resolve(result)));
+        return promise;
+      });
+      return {
+        scan,
+        finish: (n: number, result: ProcInfo[] | Listing | null | Error) => calls[n]?.(result),
+      };
+    }
+
+    it("reports an empty list, not unavailable, while the first scan is running", () => {
+      const { scan } = slow();
+      const tracker = trackSessions(scan, 0);
+      expect(tracker.read(GIB).sessions).toEqual([]);
+    });
+
+    it("never runs two scans at once, however many ticks pass", async () => {
+      const { scan, finish } = slow();
+      const tracker = trackSessions(scan, 0);
+      tracker.update(SCAN_EVERY_MS);
+      tracker.update(5 * SCAN_EVERY_MS);
+      expect(scan).toHaveBeenCalledTimes(1);
+      finish(0, [proc(1, 0, "a1", 0)]);
+      await settled();
+      tracker.update(5 * SCAN_EVERY_MS);
+      expect(scan).toHaveBeenCalledTimes(2);
+    });
+
+    it("times each scan from when it started, not from when it finished", async () => {
+      const { scan, finish } = slow();
+      const tracker = trackSessions(scan, 0);
+      finish(0, [proc(1, 0, "a1", 0)]);
+      await settled();
+      tracker.update(SCAN_EVERY_MS);
+      // The lister is slow: it answers long after the next scan was due.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      finish(1, [proc(1, 0, "a1", 1000)]);
+      await settled();
+      expect(tracker.read(GIB).sessions?.[0]?.cores).toBeCloseTo(1); // 1000 ticks over 10 s
+    });
+
+    it("measures from when the lister says it read the table, not from when it started", async () => {
+      // PowerShell takes a while to start; the snapshot is taken 1 s in, so 10 s passed between
+      // the two snapshots even though the second scan started 10 s after the first.
+      const { scan, finish } = slow();
+      const tracker = trackSessions(scan, 0);
+      finish(0, { procs: [proc(1, 0, "a1", 0)], delayMs: 500 });
+      await settled();
+      tracker.update(SCAN_EVERY_MS);
+      finish(1, { procs: [proc(1, 0, "a1", 1000)], delayMs: 1500 });
+      await settled();
+      // The snapshots are 11 s apart (500 ms and 11.5 s), and 1000 ticks are 10 s of CPU.
+      expect(tracker.read(GIB).sessions?.[0]?.cores).toBeCloseTo(10 / 11);
+    });
+
+    it("treats a rejected scan as a failed one", async () => {
+      const { scan, finish } = slow();
+      const tracker = trackSessions(scan, 0);
+      finish(0, new Error("ps is missing"));
+      await settled();
+      expect(tracker.read(GIB).sessions).toBeNull();
+      tracker.update(SCAN_EVERY_MS);
+      finish(1, [proc(1, 0, "a1", 0)]);
+      await settled();
+      expect(tracker.read(GIB).sessions).toEqual([]);
+    });
   });
 });

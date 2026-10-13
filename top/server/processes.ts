@@ -198,53 +198,106 @@ export const HEAVY_CORES = 1;
 export const HEAVY_SCANS = 3;
 export const HEAVY_MEMORY_SHARE = 0.25;
 
+/** A process list read some time after the scan started, which a lister that knows says. */
+export interface Listing {
+  procs: ProcInfo[];
+  delayMs: number;
+}
+
+/**
+ * Lists processes; null for a scan that failed, and a throw or rejection counts as one. macOS and
+ * Windows listers run a command, so they are async.
+ */
+export type Scan = () => ProcInfo[] | Listing | null | Promise<ProcInfo[] | Listing | null>;
+
+const NO_LOAD = { cores: 0, rss: 0 };
+/** After this many failures in a row the retries slow down, doubling up to the cap. */
+const MAX_RETRY_MS = 5 * 60_000;
+
 /**
  * Rescans every `SCAN_EVERY_MS` and remembers a short window of each session's CPU, so a one-scan
- * spike does not flag it. `scan` returns null where processes cannot be listed: for good on a host
- * that cannot do it at all (not Linux), and for one scan on a host that failed once.
+ * spike does not flag it. Until a scan has worked there is nothing to diff against, so sessions are
+ * unavailable (null) once a scan has failed; they are also unavailable after a lasting failure,
+ * never an empty list, which would claim that nothing is running. A failed scan after a good one
+ * keeps the last readings for a while. Failures are retried ever more slowly, since a lister that
+ * fails three times in a row is usually blocked, not unlucky. One scan runs at a time, timed from
+ * when it started plus the delay its lister reports.
  */
-export function trackSessions(scan: () => ProcInfo[] | null, startedAt: number) {
-  const first = scan();
-  const supported = first !== null;
-  let previous = first ? attribute(first, null, 0).ticks : new Map<string, number>();
-  let latest: Pick<Attribution, "sessions" | "other"> = {
-    sessions: [],
-    other: { cores: 0, rss: 0 },
-  };
+export function trackSessions(scan: Scan, startedAt: number) {
+  let previous: Map<string, number> | null = null;
+  let latest: Pick<Attribution, "sessions" | "other"> = { sessions: [], other: NO_LOAD };
   let scannedAt = startedAt;
+  let triedAt = startedAt;
   let failures = 0;
+  let pending = false;
+  let unavailable = false;
   let recent = new Map<string, number[]>();
+
+  const settle = (result: ProcInfo[] | Listing | null, at: number) => {
+    if (!result) {
+      // Keep the last readings through a hiccup, but not through a lasting failure. The next
+      // good scan diffs against the last good one, over the longer interval.
+      if (++failures >= HEAVY_SCANS) {
+        unavailable = true;
+        latest = { sessions: [], other: NO_LOAD };
+        recent = new Map();
+      } else if (!previous) unavailable = true;
+      return;
+    }
+    failures = 0;
+    unavailable = false;
+    const { procs, delayMs } = Array.isArray(result) ? { procs: result, delayMs: 0 } : result;
+    const readAt = at + delayMs;
+    const next = attribute(procs, previous, (readAt - scannedAt) / 1000);
+    scannedAt = readAt;
+    // The first good scan is only a baseline: it has no earlier counters to diff.
+    if (!previous) {
+      previous = next.ticks;
+      return;
+    }
+    previous = next.ticks;
+    latest = { sessions: next.sessions, other: next.other };
+    recent = new Map(
+      next.sessions.map(({ agentId, cores }) => [
+        agentId,
+        [...(recent.get(agentId) ?? []), cores].slice(-HEAVY_SCANS),
+      ]),
+    );
+  };
+
+  const start = (at: number) => {
+    triedAt = at;
+    let result: ReturnType<Scan>;
+    try {
+      result = scan();
+      if (!(result instanceof Promise)) return settle(result, at);
+    } catch {
+      return settle(null, at);
+    }
+    pending = true;
+    result
+      .catch(() => null)
+      .then((procs) => settle(procs, at))
+      .catch(() => {})
+      .finally(() => {
+        pending = false;
+      });
+  };
+  start(startedAt);
 
   return {
     update(at: number) {
-      if (!supported || at - scannedAt < SCAN_EVERY_MS) return;
-      const procs = scan();
-      if (!procs) {
-        // Keep the last readings through a hiccup, but not through a lasting failure. The next
-        // good scan diffs against the last good one, over the longer interval.
-        if (++failures >= HEAVY_SCANS) {
-          latest = { sessions: [], other: { cores: 0, rss: 0 } };
-          recent = new Map();
-        }
-        return;
-      }
-      failures = 0;
-      const next = attribute(procs, previous, (at - scannedAt) / 1000);
-      previous = next.ticks;
-      scannedAt = at;
-      latest = { sessions: next.sessions, other: next.other };
-      recent = new Map(
-        next.sessions.map(({ agentId, cores }) => [
-          agentId,
-          [...(recent.get(agentId) ?? []), cores].slice(-HEAVY_SCANS),
-        ]),
-      );
+      const wait =
+        failures < HEAVY_SCANS
+          ? SCAN_EVERY_MS
+          : Math.min(SCAN_EVERY_MS * 2 ** (failures - HEAVY_SCANS + 1), MAX_RETRY_MS);
+      if (!pending && at - triedAt >= wait) start(at);
     },
     read(totalMemory: number): {
       sessions: Session[] | null;
       other: { cores: number; rss: number };
     } {
-      if (!supported) return { sessions: null, other: { cores: 0, rss: 0 } };
+      if (unavailable) return { sessions: null, other: NO_LOAD };
       const sessions = latest.sessions
         .map((session): Session => {
           const window = recent.get(session.agentId) ?? [];
