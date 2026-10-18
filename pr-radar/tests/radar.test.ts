@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { loadAgents, loadWorkspaces } from "../client/directory-load";
 import { observeDirectoryInvalidation } from "../client/directory-observation";
 import {
   type AgentEntry,
@@ -248,6 +249,64 @@ const directoryEvents: ReadonlyArray<
   ["workspace snapshot", (_agents, workspaces) => workspaces.snapshot()],
   ["workspace update", (_agents, workspaces) => workspaces.update()],
 ];
+
+describe("directory requests", () => {
+  const page = { entries: [], pageInfo: { hasMore: false, nextCursor: null } };
+
+  test("lists include background workspaces", async () => {
+    const agents = vi.fn().mockResolvedValue(page);
+    const workspaces = vi.fn().mockResolvedValue(page);
+    const paseo = {
+      agents: { list: agents },
+      workspaces: { list: workspaces },
+    } as unknown as PaseoApi;
+
+    await loadAgents(paseo);
+    await loadWorkspaces(paseo);
+
+    expect(agents).toHaveBeenCalledWith(expect.objectContaining({ includeBackground: true }));
+    expect(workspaces).toHaveBeenCalledWith(expect.objectContaining({ includeBackground: true }));
+  });
+
+  test("subscriptions include background workspaces", async () => {
+    const agents = vi
+      .fn()
+      .mockResolvedValue({ subscription: ownedDirectoryObservation().subscription });
+    const workspaces = vi
+      .fn()
+      .mockResolvedValue({ subscription: ownedDirectoryObservation().subscription });
+    const paseo = {
+      agents: { list: agents },
+      workspaces: { list: workspaces },
+    } as unknown as PaseoApi;
+
+    const cleanup = observeDirectoryInvalidation(paseo, vi.fn(), 500);
+    cleanup();
+
+    expect(agents).toHaveBeenCalledWith(
+      expect.objectContaining({ subscribe: {}, includeBackground: true }),
+    );
+    expect(workspaces).toHaveBeenCalledWith(
+      expect.objectContaining({ subscribe: {}, includeBackground: true }),
+    );
+  });
+
+  test("pages agents by a stable created_at key and follows the cursor", async () => {
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({ entries: [], pageInfo: { hasMore: true, nextCursor: "c1" } })
+      .mockResolvedValueOnce(page);
+    const paseo = { agents: { list } } as unknown as PaseoApi;
+
+    await loadAgents(paseo);
+
+    expect(list).toHaveBeenCalledTimes(2);
+    for (const [options] of list.mock.calls) {
+      expect(options.sort).toEqual([{ key: "created_at", direction: "desc" }]);
+    }
+    expect(list.mock.calls[1]?.[0].page.cursor).toBe("c1");
+  });
+});
 
 describe("directory invalidation observations", () => {
   test.each(directoryEvents)(
