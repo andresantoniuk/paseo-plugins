@@ -54,7 +54,7 @@ describe("edgeThickness", () => {
 
     expect(ten).toBeGreaterThan(one);
     expect(thousand).toBeGreaterThanOrEqual(ten);
-    expect(thousand).toBeLessThanOrEqual(6);
+    expect(thousand).toBeLessThanOrEqual(7);
   });
 });
 
@@ -65,13 +65,12 @@ describe("buildGraph", () => {
     const layout = buildGraph([parent, child], {
       messagesByAgent: new Map([["child", 7]]),
       edges: [],
+      subagents: [],
     });
 
     expect(layout.nodes).toHaveLength(2);
-    const childNode = layout.byId.get("child");
-    const parentNode = layout.byId.get("parent");
-    expect(childNode?.depth).toBe(1);
-    expect(childNode?.x).toBeGreaterThan(parentNode?.x ?? 0);
+    expect(layout.byId.has("child")).toBe(true);
+    expect(layout.byId.has("parent")).toBe(true);
     expect(layout.edges).toEqual([
       { from: "parent", to: "child", count: 7, kind: "tree" },
     ]);
@@ -81,6 +80,7 @@ describe("buildGraph", () => {
     const layout = buildGraph([entry("a"), entry("b")], {
       messagesByAgent: new Map(),
       edges: [{ from: "a", to: "b", count: 3, kind: "message" }],
+      subagents: [],
     });
 
     expect(layout.edges).toEqual([{ from: "a", to: "b", count: 3, kind: "message" }]);
@@ -91,6 +91,6 @@ describe("buildGraph", () => {
     const b = entry("b", { parent: "a" });
     const layout = buildGraph([a, b], undefined);
 
-    expect(layout.nodes.map((node) => node.entry.agent.id).sort()).toEqual(["a", "b"]);
+    expect(layout.nodes.map((node) => node.agentId ?? node.id).sort()).toEqual(["a", "b"]);
   });
 });

@@ -1,6 +1,6 @@
 import { usePaseo } from "@getpaseo/plugin/client";
 import { useQuery } from "@tanstack/react-query";
-import type { GraphEdge, InteractionData } from "./graph";
+import type { GraphEdge, InteractionData, SubagentInteraction } from "./graph";
 import type { AgentEntry } from "./monitor";
 
 const TIMELINE_LIMIT = 80;
@@ -73,12 +73,22 @@ export async function fetchInteractions(
 
   const messagesByAgent = new Map<string, number>();
   const edgeMap = new Map<string, GraphEdge>();
+  const subagentMap = new Map<string, SubagentInteraction>();
   const addEdge = (from: string, to: string, count: number, kind: GraphEdge["kind"]) => {
     if (!from || !to || from === to) return;
     const key = `${from}>${to}`;
     const existing = edgeMap.get(key);
     if (existing) existing.count += count;
     else edgeMap.set(key, { from, to, count, kind });
+  };
+  const addSubagent = (parentId: string, label: string, kind: string) => {
+    const key = `${parentId}>${label}`;
+    const existing = subagentMap.get(key);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+    subagentMap.set(key, { parentId, id: key, label, kind, count: 1 });
   };
 
   for (let index = 0; index < selected.length; index += CONCURRENCY) {
@@ -101,11 +111,26 @@ export async function fetchInteractions(
             }
             if (item.type !== "tool_call") continue;
 
+            const detail = item.detail as Record<string, unknown> | undefined;
+            if (detail?.type === "sub_agent") {
+              const label =
+                typeof detail.description === "string" && detail.description.trim()
+                  ? detail.description.trim()
+                  : typeof detail.subAgentType === "string" && detail.subAgentType.trim()
+                    ? detail.subAgentType.trim()
+                    : "subagent";
+              addSubagent(
+                entry.agent.id,
+                label,
+                typeof detail.subAgentType === "string" ? detail.subAgentType : "subagent",
+              );
+            }
+
             const sender = item.agentMessage?.sender?.id;
             if (sender && sender !== entry.agent.id) {
               addEdge(sender, entry.agent.id, 1, "message");
             }
-            const target = targetFromDetail(item.detail, agentIds, sessionToAgent);
+            const target = targetFromDetail(detail, agentIds, sessionToAgent);
             if (target) addEdge(entry.agent.id, target, 1, "tree");
           }
         } catch {
@@ -115,7 +140,7 @@ export async function fetchInteractions(
     );
   }
 
-  return { messagesByAgent, edges: [...edgeMap.values()] };
+  return { messagesByAgent, edges: [...edgeMap.values()], subagents: [...subagentMap.values()] };
 }
 
 export function useInteractionGraph(
