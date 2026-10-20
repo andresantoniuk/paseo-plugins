@@ -163,6 +163,7 @@ function Controls({
         <SettingsCard>
           <SettingsSelect
             label="Default bucket"
+            hint="Bucket the monitor opens on. Pick All to always start with every agent."
             value={settings.values.defaultBucket}
             options={bucketOptions}
             disabled={settings.saving}

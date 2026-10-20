@@ -22,10 +22,13 @@ describe("monitor settings document", () => {
     ]);
   });
 
-  test("moves the v1 All default to Attention", () => {
-    expect(monitorSettings.migrate?.({ defaultBucket: "all", showModel: false }, 1)).toMatchObject({
+  test("fills the bucket only when an older document never stored it", () => {
+    expect(monitorSettings.migrate?.({ showModel: false }, 1)).toMatchObject({
       defaultBucket: "attention",
       showModel: false,
+    });
+    expect(monitorSettings.migrate?.({ defaultBucket: "all" }, 1)).toMatchObject({
+      defaultBucket: "all",
     });
     expect(monitorSettings.migrate?.({ defaultBucket: "closed" }, 1)).toMatchObject({
       defaultBucket: "closed",

@@ -70,10 +70,9 @@ export const monitorSettings = defineSettings({
   migrate(values, fromVersion) {
     if (fromVersion >= 2) return values;
     const previous = (values ?? {}) as Record<string, unknown>;
-    // v1 opened on All by default. The monitor is a triage screen, so existing
-    // hosts move to Attention unless the user had explicitly chosen another
-    // bucket.
-    if (previous.defaultBucket === "all" || previous.defaultBucket === undefined) {
+    // Only fill the field for documents created before the setting existed.
+    // Never overwrite a bucket the host already stored: "All" stays "All".
+    if (previous.defaultBucket === undefined) {
       return { ...previous, defaultBucket: "attention" };
     }
     return values;
