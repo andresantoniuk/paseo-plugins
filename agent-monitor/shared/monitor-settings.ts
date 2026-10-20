@@ -38,7 +38,7 @@ export const DEFAULT_SETTINGS: MonitorSettings = {
   showLastError: true,
   showPlacementInCompact: true,
   density: "comfortable",
-  defaultBucket: "all",
+  defaultBucket: "attention",
   hideClosedUnlessFiltered: false,
 };
 
@@ -65,8 +65,18 @@ export const monitorSettingsSchema = z.object({
 export const monitorSettings = defineSettings({
   id: "monitor",
   scope: "host",
-  version: 1,
+  version: 2,
   schema: monitorSettingsSchema,
+  migrate(values, fromVersion) {
+    if (fromVersion >= 2) return values;
+    const previous = (values ?? {}) as Record<string, unknown>;
+    // Only fill the field for documents created before the setting existed.
+    // Never overwrite a bucket the host already stored: "All" stays "All".
+    if (previous.defaultBucket === undefined) {
+      return { ...previous, defaultBucket: "attention" };
+    }
+    return values;
+  },
 });
 
 export const GROUPING_OPTIONS: readonly { id: GroupingMode; label: string; hint: string }[] = [

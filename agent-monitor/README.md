@@ -12,13 +12,18 @@ https://github.com/user-attachments/assets/3c841799-ed98-4ec4-86a0-a7917e3894fc
 
 ## Screenshots
 
-Agent, project, and workspace names come from an isolated synthetic workspace. Both PNGs were
-captured at 2× pixel density after browser DevTools replaced the local host label and verified that
-no private organization names remained in the rendered page.
+Agent, project, and workspace names come from an isolated synthetic workspace. The roster and
+settings PNGs were captured at 2× pixel density after browser DevTools replaced the local host
+label and verified that no private organization names remained in the rendered page. The graph
+screenshot uses the same synthetic project and agent names.
 
 ### Project-first roster
 
 ![Agent Monitor project-first roster](https://raw.githubusercontent.com/omercnet/paseo-plugins/main/agent-monitor/docs/images/agent-monitor-roster.png)
+
+### Graph view
+
+![Agent Monitor graph view](docs/images/agent-graph.png)
 
 ### Monitor settings
 
@@ -35,6 +40,7 @@ no private organization names remained in the rendered page.
   collapse of matching workspace headers, density, default bucket, whether Closed stays out of
   All, and display toggles for diffs, pin markers, model, wait age, subagent counts, last error, and
   compact placement. Preferences are a typed, host-scoped document shared by connected clients.
+  New hosts open on Attention by default; choose All or another bucket in Monitor settings.
 - Workspace headers show up to two workspace labels and current `+additions −deletions`
   (additions in the success color, deletions in danger when color diffs are on).
 - Per row: a status dot that separates errors (danger) from agents waiting on you (warning) and
@@ -42,6 +48,12 @@ no private organization names remained in the rendered page.
   falling back to `updatedAt`), model, and `lastError` inline.
 - Parent rows show their subagent count; child rows use a left indent guide.
 - Text filter over title, agent id, provider, model, cwd, project, and workspace.
+- **Graph view**: switch the header between Roster and Graph. Agents sit in compact
+  project/workspace panels; provider-native subagents appear as dashed nodes. Edges encode parent
+  hand-offs, timeline message provenance, and subagent dispatches, with thickness scaled by message
+  count. Drag cards, pan the canvas, zoom with the wheel or a trackpad pinch, filter by project,
+  workspace, provider, subagents, or connected-only, and select a card or edge to focus its
+  neighbourhood and dim the rest.
 - Select an agent row to open that agent, or select a workspace header (or its folder button when
   collapsed) to open its workspace through Paseo's cross-platform navigation API.
 - Archive one agent, or sweep every closed agent (two taps).
@@ -68,6 +80,10 @@ backstop refetch. The screen, the sidebar row, and its popover share that query,
 and backstop; on web and desktop, refreshes pause while the window is hidden and catch up when it returns. The plugin
 borrows the selected host's connection; it opens no socket of its own. Agents and workspaces in
 background workspaces are included.
+
+The graph reads the tail of each agent's timeline (200 entries, up to 60 agents, four at a time) to
+derive message and subagent edges. Closed agents or unreadable timelines contribute no edges, and
+the graph never opens a separate connection of its own.
 
 ## Limits
 
