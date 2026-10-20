@@ -44,12 +44,27 @@ export type GraphNode = {
   y: number;
 };
 
+export type GraphCluster = {
+  key: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  count: number;
+};
+
 export type GraphLayout = {
   nodes: GraphNode[];
   byId: Map<string, GraphNode>;
   edges: GraphEdge[];
+  clusters: GraphCluster[];
   width: number;
   height: number;
+};
+
+export type GraphOptions = {
+  includeSubagents?: boolean;
 };
 
 export const NODE_WIDTH = 240;
@@ -104,16 +119,18 @@ function mergeEdge(
 }
 
 /**
- * A force-directed layout for agents and their provider subagents.
+ * A clustered force layout for agents and their provider subagents.
  *
  * Paseo agents and provider-native subagents live in different universes: the
  * former have `parentAgentId`, the latter only appear as `Task`/`Agent` tool
  * calls in a timeline. Both are nodes here, with the invocation count as the
- * edge weight. Agents with no relationships still spread over the canvas.
+ * edge weight. A cluster attraction keeps each project/workspace together so
+ * the canvas reads as groups instead of a cloud.
  */
 export function buildGraph(
   entries: readonly AgentEntry[],
   interactions: InteractionData | undefined,
+  options: GraphOptions = {},
 ): GraphLayout {
   const nodes: GraphNode[] = entries.map((entry) => {
     const childAgents = entries.filter(
@@ -141,54 +158,46 @@ export function buildGraph(
   const edgeMap = new Map<string, GraphEdge>();
   for (const node of nodes) {
     if (node.parentId && byId.has(node.parentId)) {
-      mergeEdge(
-        edgeMap,
-        node.parentId,
-        node.id,
-        Math.max(1, node.messageCount),
-        "tree",
-        "max",
-      );
+      mergeEdge(edgeMap, node.parentId, node.id, Math.max(1, node.messageCount), "tree", "max");
     }
   }
 
-  // Provider-native subagents become leaf nodes, one per distinct task label.
   const subagentNodes: GraphNode[] = [];
-  const subagents = [...(interactions?.subagents ?? [])]
-    .sort((left, right) => right.count - left.count)
-    .slice(0, 80);
-  for (const subagent of subagents) {
-    const parent = byId.get(subagent.parentId);
-    if (!parent) continue;
-    const id = `sub:${subagent.parentId}:${shortId(subagent.label)}`;
-    if (byId.has(id)) {
+  if (options.includeSubagents !== false) {
+    const subagents = [...(interactions?.subagents ?? [])]
+      .sort((left, right) => right.count - left.count)
+      .slice(0, 80);
+    for (const subagent of subagents) {
+      const parent = byId.get(subagent.parentId);
+      if (!parent) continue;
+      const id = `sub:${subagent.parentId}:${shortId(subagent.label)}`;
       const existing = byId.get(id);
       if (existing) {
         existing.messageCount += subagent.count;
         existing.meta = `${subagent.kind} · ${existing.messageCount} calls`;
+        continue;
       }
-      continue;
+      const node: GraphNode = {
+        id,
+        kind: "subagent",
+        title: subagent.label,
+        repo: `${parent.repo} · subagent`,
+        meta: `${subagent.kind} · ${subagent.count} calls`,
+        status: "subagent",
+        colorKey: parent.colorKey,
+        messageCount: subagent.count,
+        childCount: 0,
+        parentId: parent.id,
+        agentId: null,
+        entry: null,
+        x: 0,
+        y: 0,
+      };
+      subagentNodes.push(node);
+      byId.set(id, node);
+      parent.childCount += 1;
+      mergeEdge(edgeMap, parent.id, id, subagent.count, "subagent", "max");
     }
-    const node: GraphNode = {
-      id,
-      kind: "subagent",
-      title: subagent.label,
-      repo: `${parent.repo} · subagent`,
-      meta: `${subagent.kind} · ${subagent.count} calls`,
-      status: "subagent",
-      colorKey: parent.colorKey,
-      messageCount: subagent.count,
-      childCount: 0,
-      parentId: parent.id,
-      agentId: null,
-      entry: null,
-      x: 0,
-      y: 0,
-    };
-    subagentNodes.push(node);
-    byId.set(id, node);
-    parent.childCount += 1;
-    mergeEdge(edgeMap, parent.id, id, subagent.count, "subagent", "max");
   }
   nodes.push(...subagentNodes);
 
@@ -196,25 +205,39 @@ export function buildGraph(
     mergeEdge(edgeMap, edge.from, edge.to, edge.count, edge.kind, "add");
   }
 
-  // Deterministic initial ring, then a force simulation with repulsion and
-  // edge attraction. Provider subagents start near their parent.
-  const positions = new Map<string, { x: number; y: number }>();
-  const total = Math.max(1, nodes.length);
-  nodes.forEach((node, index) => {
-    const angle = (index / total) * Math.PI * 2;
-    const radius = 140 + Math.sqrt(total) * 70;
-    positions.set(node.id, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+  // One cluster per project/workspace, arranged on a ring. Nodes start on a
+  // smaller ring around their cluster and are then pulled toward it.
+  const clusters = new Map<string, GraphNode[]>();
+  for (const node of nodes) {
+    const list = clusters.get(node.colorKey);
+    if (list) list.push(node);
+    else clusters.set(node.colorKey, [node]);
+  }
+  const clusterKeys = [...clusters.keys()];
+  const clusterCenters = new Map<string, { x: number; y: number }>();
+  clusterKeys.forEach((key, index) => {
+    const angle = (index / Math.max(1, clusterKeys.length)) * Math.PI * 2;
+    const radius = 220 + Math.sqrt(Math.max(1, nodes.length)) * 45;
+    clusterCenters.set(key, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
   });
-  for (const node of subagentNodes) {
-    if (!node.parentId) continue;
-    const parent = positions.get(node.parentId);
-    if (!parent) continue;
-    positions.set(node.id, { x: parent.x + 120, y: parent.y + 60 });
+
+  const positions = new Map<string, { x: number; y: number }>();
+  for (const [key, clusterNodes] of clusters) {
+    const center = clusterCenters.get(key);
+    if (!center) continue;
+    clusterNodes.forEach((node, index) => {
+      const angle = (index / Math.max(1, clusterNodes.length)) * Math.PI * 2;
+      const radius = 70 + Math.sqrt(clusterNodes.length) * 22;
+      positions.set(node.id, {
+        x: center.x + Math.cos(angle) * radius,
+        y: center.y + Math.sin(angle) * radius,
+      });
+    });
   }
 
   const nodeList = [...byId.values()];
-  const ideal = NODE_WIDTH + 80;
-  for (let iteration = 0; iteration < 180; iteration += 1) {
+  const ideal = NODE_WIDTH + 90;
+  for (let iteration = 0; iteration < 220; iteration += 1) {
     const displacement = new Map(nodeList.map((node) => [node.id, { x: 0, y: 0 }]));
 
     for (let left = 0; left < nodeList.length; left += 1) {
@@ -250,11 +273,11 @@ export function buildGraph(
       const a = positions.get(edge.from);
       const b = positions.get(edge.to);
       if (!a || !b) continue;
-      let dx = a.x - b.x;
-      let dy = a.y - b.y;
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
       const distance = Math.hypot(dx, dy) || 0.01;
       const weight = 1 + Math.min(2, Math.log2(edge.count + 1) * 0.6);
-      const force = ((distance * distance) / ideal) * weight * 0.5;
+      const force = ((distance * distance) / ideal) * weight * 0.35;
       const ux = dx / distance;
       const uy = dy / distance;
       const da = displacement.get(edge.from);
@@ -269,13 +292,20 @@ export function buildGraph(
       }
     }
 
-    const temperature = 0.12 * (1 - iteration / 180) + 0.015;
+    for (const node of nodeList) {
+      const position = positions.get(node.id);
+      const center = clusterCenters.get(node.colorKey);
+      const delta = displacement.get(node.id);
+      if (!position || !center || !delta) continue;
+      delta.x += (center.x - position.x) * 0.045;
+      delta.y += (center.y - position.y) * 0.045;
+    }
+
+    const temperature = 0.12 * (1 - iteration / 220) + 0.012;
     for (const node of nodeList) {
       const position = positions.get(node.id);
       const delta = displacement.get(node.id);
       if (!position || !delta) continue;
-      delta.x -= position.x * 0.012;
-      delta.y -= position.y * 0.012;
       const length = Math.hypot(delta.x, delta.y) || 1;
       const step = Math.min(length, temperature * 60);
       position.x += (delta.x / length) * step;
@@ -283,29 +313,82 @@ export function buildGraph(
     }
   }
 
-  // Shift the cloud into positive coordinates and normalize the canvas.
+  // Resolve hard overlaps so cards stay readable even in dense clusters.
+  for (let pass = 0; pass < 16; pass += 1) {
+    for (let left = 0; left < nodeList.length; left += 1) {
+      for (let right = left + 1; right < nodeList.length; right += 1) {
+        const a = positions.get(nodeList[left].id);
+        const b = positions.get(nodeList[right].id);
+        if (!a || !b) continue;
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const overlapX = NODE_WIDTH + 18 - Math.abs(dx);
+        const overlapY = NODE_HEIGHT + 18 - Math.abs(dy);
+        if (overlapX <= 0 || overlapY <= 0) continue;
+        if (overlapX < overlapY) {
+          const push = (overlapX / 2) * (dx >= 0 ? 1 : -1);
+          a.x += push;
+          b.x -= push;
+        } else {
+          const push = (overlapY / 2) * (dy >= 0 ? 1 : -1);
+          a.y += push;
+          b.y -= push;
+        }
+      }
+    }
+  }
+
+  // Shift the cloud into positive coordinates.
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
   for (const position of positions.values()) {
     minX = Math.min(minX, position.x);
     minY = Math.min(minY, position.y);
   }
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
   for (const node of nodeList) {
     const position = positions.get(node.id);
     if (!position) continue;
     node.x = position.x - minX + GRAPH_PADDING;
     node.y = position.y - minY + GRAPH_PADDING;
-    maxX = Math.max(maxX, node.x);
-    maxY = Math.max(maxY, node.y);
   }
 
-  return {
-    nodes: nodeList,
-    byId,
-    edges: [...edgeMap.values()],
-    width: Math.max(NODE_WIDTH + GRAPH_PADDING * 2, maxX + NODE_WIDTH + GRAPH_PADDING),
-    height: Math.max(NODE_HEIGHT + GRAPH_PADDING * 2, maxY + NODE_HEIGHT + GRAPH_PADDING),
-  };
+  const clusterSummaries: GraphCluster[] = [];
+  for (const [key, clusterNodes] of clusters) {
+    let left = Number.POSITIVE_INFINITY;
+    let top = Number.POSITIVE_INFINITY;
+    let right = Number.NEGATIVE_INFINITY;
+    let bottom = Number.NEGATIVE_INFINITY;
+    for (const node of clusterNodes) {
+      left = Math.min(left, node.x);
+      top = Math.min(top, node.y);
+      right = Math.max(right, node.x + NODE_WIDTH);
+      bottom = Math.max(bottom, node.y + NODE_HEIGHT);
+    }
+    if (!Number.isFinite(left)) continue;
+    const pad = 20;
+    const header = 30;
+    clusterSummaries.push({
+      key,
+      name: key.split(" · ")[0] || key,
+      x: left - pad,
+      y: top - header - pad,
+      width: right - left + pad * 2,
+      height: bottom - top + pad * 2 + header,
+      count: clusterNodes.length,
+    });
+  }
+
+  const width = Math.max(
+    NODE_WIDTH + GRAPH_PADDING * 2,
+    ...clusterSummaries.map((cluster) => cluster.x + cluster.width + GRAPH_PADDING),
+  );
+  const height = Math.max(
+    NODE_HEIGHT + GRAPH_PADDING * 2,
+    ...clusterSummaries.map((cluster) => cluster.y + cluster.height + GRAPH_PADDING),
+  );
+
+  const finalEdges = [...edgeMap.values()].filter(
+    (edge) => byId.has(edge.from) && byId.has(edge.to),
+  );
+  return { nodes: nodeList, byId, edges: finalEdges, clusters: clusterSummaries, width, height };
 }

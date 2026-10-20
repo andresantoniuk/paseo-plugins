@@ -1,25 +1,17 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useCallback, useMemo, useRef, useState } from "react";
-import {
-  PanResponder,
-  Pressable,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
+import { PanResponder, Pressable, ScrollView, Text, View } from "react-native";
 import {
   buildGraph,
   edgeLabel,
   edgeThickness,
-  GRAPH_PADDING,
-  type GraphEdge,
   type GraphNode,
   type InteractionData,
   NODE_HEIGHT,
   NODE_WIDTH,
 } from "./graph";
-import { type AgentEntry, bucketOf } from "./monitor";
+import { type AgentEntry, bucketOf, placement } from "./monitor";
 
 type GraphViewProps = {
   entries: AgentEntry[];
@@ -51,15 +43,82 @@ function statusColor(node: GraphNode, theme: PluginSurfaceProps["theme"]): strin
   return theme.colors.foregroundMuted;
 }
 
-function projectName(node: GraphNode): string {
-  return node.colorKey.split(" · ")[0] || "Project";
-}
+const projectNameOf = (node: GraphNode): string => node.colorKey.split(" · ")[0] || "Project";
 
 export function AgentGraph({ entries, interactions, loading, theme, navigation }: GraphViewProps) {
-  const layout = useMemo(() => buildGraph(entries, interactions), [entries, interactions]);
+  const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  const [providerFilter, setProviderFilter] = useState<string | null>(null);
+  const [showSubagents, setShowSubagents] = useState(true);
+  const [connectedOnly, setConnectedOnly] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [manual, setManual] = useState<Record<string, { x: number; y: number }>>({});
   const [scale, setScale] = useState(1);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+
+  const projectKeys = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entry of entries) {
+      const name = entry.project.projectName;
+      if (name && !map.has(name)) map.set(name, placement(entry));
+    }
+    return map;
+  }, [entries]);
+  const projects = useMemo(() => [...projectKeys.keys()].sort(), [projectKeys]);
+  const providers = useMemo(
+    () => [...new Set(entries.map((entry) => entry.agent.provider))].sort(),
+    [entries],
+  );
+  const filteredEntries = useMemo(
+    () =>
+      entries.filter(
+        (entry) =>
+          (!projectFilter || entry.project.projectName === projectFilter) &&
+          (!providerFilter || entry.agent.provider === providerFilter),
+      ),
+    [entries, projectFilter, providerFilter],
+  );
+  const layout = useMemo(
+    () => buildGraph(filteredEntries, interactions, { includeSubagents: showSubagents }),
+    [filteredEntries, interactions, showSubagents],
+  );
+
+  const subagentCount = useMemo(() => {
+    const ids = new Set(filteredEntries.map((entry) => entry.agent.id));
+    return (interactions?.subagents ?? []).filter((subagent) => ids.has(subagent.parentId)).length;
+  }, [filteredEntries, interactions]);
+
+  const degree = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const edge of layout.edges) {
+      map.set(edge.from, (map.get(edge.from) ?? 0) + 1);
+      map.set(edge.to, (map.get(edge.to) ?? 0) + 1);
+    }
+    return map;
+  }, [layout.edges]);
+
+  const visibleNodes = useMemo(
+    () => (connectedOnly ? layout.nodes.filter((node) => (degree.get(node.id) ?? 0) > 0) : layout.nodes),
+    [connectedOnly, degree, layout.nodes],
+  );
+  const visibleIds = useMemo(() => new Set(visibleNodes.map((node) => node.id)), [visibleNodes]);
+  const visibleById = useMemo(
+    () => new Map(visibleNodes.map((node) => [node.id, node])),
+    [visibleNodes],
+  );
+  const visibleEdges = useMemo(
+    () => layout.edges.filter((edge) => visibleIds.has(edge.from) && visibleIds.has(edge.to)),
+    [layout.edges, visibleIds],
+  );
+  const visibleClusters = useMemo(
+    () =>
+      layout.clusters
+        .map((cluster) => ({
+          ...cluster,
+          count: visibleNodes.filter((node) => node.colorKey === cluster.key).length,
+        }))
+        .filter((cluster) => cluster.count > 0),
+    [layout.clusters, visibleNodes],
+  );
 
   const positionOf = useCallback(
     (node: GraphNode) => manual[node.id] ?? { x: node.x, y: node.y },
@@ -69,14 +128,14 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
   const neighborIds = useMemo(() => {
     if (!selectedId) return new Set<string>();
     const ids = new Set<string>([selectedId]);
-    for (const edge of layout.edges) {
+    for (const edge of visibleEdges) {
       if (edge.from === selectedId) ids.add(edge.to);
       if (edge.to === selectedId) ids.add(edge.from);
     }
     return ids;
-  }, [layout.edges, selectedId]);
+  }, [selectedId, visibleEdges]);
 
-  const selected = selectedId ? layout.byId.get(selectedId) ?? null : null;
+  const selected = selectedId ? visibleById.get(selectedId) ?? null : null;
 
   const moveNode = useCallback((id: string, position: { x: number; y: number }) => {
     setManual((current) => ({ ...current, [id]: position }));
@@ -86,16 +145,22 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     setSelectedId(null);
     setManual({});
     setScale(1);
+    setProjectFilter(null);
+    setProviderFilter(null);
+    setShowSubagents(true);
+    setConnectedOnly(false);
   }, []);
 
-  const legend = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const node of layout.nodes) {
-      const key = projectName(node);
-      if (!seen.has(key)) seen.set(key, node.colorKey);
-    }
-    return [...seen.entries()].slice(0, 6).map(([name, key]) => ({ name, color: PALETTE[colorIndex(key)] }));
-  }, [layout.nodes]);
+  const fit = useCallback(() => {
+    if (!viewport.width || !viewport.height || !layout.width || !layout.height) return;
+    const next = Math.min(
+      (viewport.width - 40) / layout.width,
+      (viewport.height - 40) / layout.height,
+      1.4,
+    );
+    setScale(Math.max(0.35, next));
+    setManual({});
+  }, [viewport.height, viewport.width, layout.height, layout.width]);
 
   if (entries.length === 0) {
     return (
@@ -114,46 +179,94 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     <View style={{ flex: 1, backgroundColor: theme.colors.surface0 }}>
       <View
         style={{
-          flexDirection: "row",
-          flexWrap: "wrap",
-          alignItems: "center",
-          gap: 10,
-          paddingHorizontal: 14,
-          paddingVertical: 8,
           borderBottomWidth: 1,
           borderBottomColor: theme.colors.border + "66",
+          paddingVertical: 7,
+          gap: 6,
         }}
       >
-        <ZoomButton label="−" theme={theme} onPress={() => setScale((value) => Math.max(0.5, value - 0.15))} />
-        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10, minWidth: 36 }}>
-          {Math.round(scale * 100)}%
-        </Text>
-        <ZoomButton label="+" theme={theme} onPress={() => setScale((value) => Math.min(2, value + 0.15))} />
-        <Pressable onPress={resetView} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>Reset</Text>
-        </Pressable>
-        {legend.map((entry) => (
-          <View key={entry.name} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: entry.color }} />
-            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>{entry.name}</Text>
-          </View>
-        ))}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-          <View
-            style={{
-              width: 14,
-              height: 1,
-              backgroundColor: theme.colors.statusWarning,
-            }}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ gap: 6, paddingHorizontal: 14 }}
+        >
+          <Chip
+            label="All projects"
+            active={projectFilter === null}
+            theme={theme}
+            onPress={() => setProjectFilter(null)}
           />
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>subagent</Text>
+          {projects.map((project) => (
+            <Chip
+              key={project}
+              label={project}
+              color={PALETTE[colorIndex(projectKeys.get(project) ?? project)]}
+              active={projectFilter === project}
+              theme={theme}
+              onPress={() => setProjectFilter(projectFilter === project ? null : project)}
+            />
+          ))}
+        </ScrollView>
+        <View
+          style={{
+            flexDirection: "row",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 6,
+            paddingHorizontal: 14,
+          }}
+        >
+          <Chip
+            label="All providers"
+            active={providerFilter === null}
+            theme={theme}
+            onPress={() => setProviderFilter(null)}
+          />
+          {providers.map((provider) => (
+            <Chip
+              key={provider}
+              label={provider}
+              active={providerFilter === provider}
+              theme={theme}
+              onPress={() => setProviderFilter(providerFilter === provider ? null : provider)}
+            />
+          ))}
+          <Chip
+            label={`Subagents ${subagentCount}`}
+            active={showSubagents}
+            theme={theme}
+            onPress={() => setShowSubagents((value) => !value)}
+          />
+          <Chip
+            label="Connected only"
+            active={connectedOnly}
+            theme={theme}
+            onPress={() => setConnectedOnly((value) => !value)}
+          />
+          <Chip label="Fit" active={false} theme={theme} onPress={fit} />
+          <ZoomButton label="−" theme={theme} onPress={() => setScale((value) => Math.max(0.35, value - 0.15))} />
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10, minWidth: 34 }}>
+            {Math.round(scale * 100)}%
+          </Text>
+          <ZoomButton label="+" theme={theme} onPress={() => setScale((value) => Math.min(2.5, value + 0.15))} />
+          <Pressable onPress={resetView} style={{ paddingHorizontal: 6, paddingVertical: 4 }}>
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>Reset</Text>
+          </Pressable>
+          {loading ? (
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>reading timelines…</Text>
+          ) : null}
         </View>
-        {loading ? (
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>reading timelines…</Text>
-        ) : null}
       </View>
 
-      <View style={{ flex: 1 }}>
+      <View
+        style={{ flex: 1 }}
+        onLayout={(event) =>
+          setViewport({
+            width: event.nativeEvent.layout.width,
+            height: event.nativeEvent.layout.height,
+          })
+        }
+      >
         <ScrollView horizontal contentContainerStyle={{ width: scaledWidth }}>
           <ScrollView
             nestedScrollEnabled
@@ -167,9 +280,43 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                 transformOrigin: "left top",
               }}
             >
-              {layout.edges.map((edge) => {
-                const from = layout.byId.get(edge.from);
-                const to = layout.byId.get(edge.to);
+              {visibleClusters.map((cluster) => {
+                const color = PALETTE[colorIndex(cluster.key)];
+                return (
+                  <View
+                    key={cluster.key}
+                    pointerEvents="none"
+                    style={{
+                      position: "absolute",
+                      left: cluster.x,
+                      top: cluster.y,
+                      width: cluster.width,
+                      height: cluster.height,
+                      borderRadius: 16,
+                      backgroundColor: color + "10",
+                      borderWidth: 1,
+                      borderColor: color + "33",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        position: "absolute",
+                        left: 12,
+                        top: 8,
+                        color,
+                        fontSize: 11,
+                        fontWeight: "700",
+                      }}
+                    >
+                      {cluster.name} · {cluster.count}
+                    </Text>
+                  </View>
+                );
+              })}
+
+              {visibleEdges.map((edge) => {
+                const from = visibleById.get(edge.from);
+                const to = visibleById.get(edge.to);
                 if (!from || !to) return null;
                 const a = positionOf(from);
                 const b = positionOf(to);
@@ -182,8 +329,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                 const length = Math.hypot(dx, dy);
                 const angle = Math.atan2(dy, dx);
                 const thickness = edgeThickness(edge.count);
-                const active =
-                  !selectedId || edge.from === selectedId || edge.to === selectedId;
+                const active = !selectedId || edge.from === selectedId || edge.to === selectedId;
                 const color =
                   edge.kind === "message"
                     ? theme.colors.accent
@@ -201,7 +347,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                       height: thickness,
                       borderRadius: thickness / 2,
                       backgroundColor: color,
-                      opacity: active ? (edge.kind === "tree" ? 0.7 : 0.85) : 0.12,
+                      opacity: active ? (edge.kind === "tree" ? 0.7 : 0.85) : 0.1,
                       transform: [{ rotate: `${angle}rad` }],
                       transformOrigin: "left center",
                     }}
@@ -209,11 +355,11 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                 );
               })}
 
-              {layout.edges.map((edge) => {
+              {visibleEdges.map((edge) => {
                 const label = edgeLabel(edge.count);
                 if (!label) return null;
-                const from = layout.byId.get(edge.from);
-                const to = layout.byId.get(edge.to);
+                const from = visibleById.get(edge.from);
+                const to = visibleById.get(edge.to);
                 if (!from || !to) return null;
                 const a = positionOf(from);
                 const b = positionOf(to);
@@ -241,7 +387,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                 );
               })}
 
-              {layout.nodes.map((node) => {
+              {visibleNodes.map((node) => {
                 const position = positionOf(node);
                 const dimmed = selectedId !== null && !neighborIds.has(node.id);
                 return (
@@ -253,10 +399,8 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                     dimmed={dimmed}
                     selected={selectedId === node.id}
                     theme={theme}
-                    navigation={navigation}
                     onSelect={setSelectedId}
                     onMove={moveNode}
-                    onOpen={(agentId) => navigation?.openAgent({ agentId })}
                   />
                 );
               })}
@@ -339,6 +483,53 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
   );
 }
 
+function Chip({
+  label,
+  active,
+  color,
+  theme,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  color?: string;
+  theme: PluginSurfaceProps["theme"];
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        maxWidth: 190,
+        minHeight: 26,
+        paddingHorizontal: 8,
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: active ? theme.colors.accent : theme.colors.border,
+        backgroundColor: active ? theme.colors.accent : theme.colors.surface1,
+      }}
+    >
+      {color ? (
+        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color }} />
+      ) : null}
+      <Text
+        numberOfLines={1}
+        style={{
+          color: active ? theme.colors.accentForeground : theme.colors.foregroundMuted,
+          fontSize: 11,
+        }}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 function ZoomButton({
   label,
   theme,
@@ -377,7 +568,6 @@ function GraphNodeView({
   theme,
   onSelect,
   onMove,
-  onOpen,
 }: {
   node: GraphNode;
   position: { x: number; y: number };
@@ -385,10 +575,8 @@ function GraphNodeView({
   dimmed: boolean;
   selected: boolean;
   theme: PluginSurfaceProps["theme"];
-  navigation: PluginSurfaceProps["navigation"];
   onSelect: (id: string) => void;
   onMove: (id: string, position: { x: number; y: number }) => void;
-  onOpen: (agentId: string) => void;
 }) {
   const start = useRef({ x: 0, y: 0 });
   const moved = useRef(false);
@@ -461,12 +649,7 @@ function GraphNodeView({
         <Text
           numberOfLines={1}
           ellipsizeMode="tail"
-          style={{
-            flex: 1,
-            color: theme.colors.foreground,
-            fontSize: 12,
-            fontWeight: "700",
-          }}
+          style={{ flex: 1, color: theme.colors.foreground, fontSize: 12, fontWeight: "700" }}
         >
           {node.title}
         </Text>

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { GraphEdge, InteractionData, SubagentInteraction } from "./graph";
 import type { AgentEntry } from "./monitor";
 
-const TIMELINE_LIMIT = 80;
+const TIMELINE_LIMIT = 120;
 const MAX_AGENTS = 60;
 const CONCURRENCY = 4;
 
