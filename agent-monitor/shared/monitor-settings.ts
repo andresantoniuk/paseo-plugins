@@ -38,7 +38,7 @@ export const DEFAULT_SETTINGS: MonitorSettings = {
   showLastError: true,
   showPlacementInCompact: true,
   density: "comfortable",
-  defaultBucket: "all",
+  defaultBucket: "attention",
   hideClosedUnlessFiltered: false,
 };
 
@@ -65,8 +65,19 @@ export const monitorSettingsSchema = z.object({
 export const monitorSettings = defineSettings({
   id: "monitor",
   scope: "host",
-  version: 1,
+  version: 2,
   schema: monitorSettingsSchema,
+  migrate(values, fromVersion) {
+    if (fromVersion >= 2) return values;
+    const previous = (values ?? {}) as Record<string, unknown>;
+    // v1 opened on All by default. The monitor is a triage screen, so existing
+    // hosts move to Attention unless the user had explicitly chosen another
+    // bucket.
+    if (previous.defaultBucket === "all" || previous.defaultBucket === undefined) {
+      return { ...previous, defaultBucket: "attention" };
+    }
+    return values;
+  },
 });
 
 export const GROUPING_OPTIONS: readonly { id: GroupingMode; label: string; hint: string }[] = [

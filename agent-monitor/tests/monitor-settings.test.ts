@@ -11,7 +11,7 @@ describe("monitor settings document", () => {
   test("is host-scoped and supplies a complete default document", () => {
     expect(monitorSettings.id).toBe("monitor");
     expect(monitorSettings.scope).toBe("host");
-    expect(monitorSettings.version).toBe(1);
+    expect(monitorSettings.version).toBe(2);
     expect(monitorSettings.schema.parse({})).toEqual(DEFAULT_SETTINGS);
     expect(DEFAULT_BUCKET_OPTIONS.map(({ id }) => id)).toEqual([
       "all",
@@ -20,6 +20,16 @@ describe("monitor settings document", () => {
       "idle",
       "closed",
     ]);
+  });
+
+  test("moves the v1 All default to Attention", () => {
+    expect(monitorSettings.migrate?.({ defaultBucket: "all", showModel: false }, 1)).toMatchObject({
+      defaultBucket: "attention",
+      showModel: false,
+    });
+    expect(monitorSettings.migrate?.({ defaultBucket: "closed" }, 1)).toMatchObject({
+      defaultBucket: "closed",
+    });
   });
 
   test("accepts complete typed overrides and rejects invalid values", () => {
