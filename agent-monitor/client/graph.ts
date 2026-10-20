@@ -24,6 +24,8 @@ export type InteractionData = {
   messagesByAgent: ReadonlyMap<string, number>;
   edges: readonly GraphEdge[];
   subagents: readonly SubagentInteraction[];
+  /** Timelines that could not be read (closed, removed, or timed out). */
+  unreadable?: number;
 };
 
 export type GraphNode = {
@@ -213,12 +215,15 @@ export function buildGraph(
     if (list) list.push(node);
     else clusters.set(node.colorKey, [node]);
   }
-  const clusterKeys = [...clusters.keys()];
+  const clusterKeys = [...clusters.keys()].sort();
   const clusterCenters = new Map<string, { x: number; y: number }>();
+  const columns = Math.max(1, Math.ceil(Math.sqrt(clusterKeys.length)));
+  const columnGap = NODE_WIDTH * 2 + 180;
+  const rowGap = NODE_HEIGHT * 3 + 140;
   clusterKeys.forEach((key, index) => {
-    const angle = (index / Math.max(1, clusterKeys.length)) * Math.PI * 2;
-    const radius = 220 + Math.sqrt(Math.max(1, nodes.length)) * 45;
-    clusterCenters.set(key, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    clusterCenters.set(key, { x: column * columnGap, y: row * rowGap });
   });
 
   const positions = new Map<string, { x: number; y: number }>();
@@ -297,8 +302,8 @@ export function buildGraph(
       const center = clusterCenters.get(node.colorKey);
       const delta = displacement.get(node.id);
       if (!position || !center || !delta) continue;
-      delta.x += (center.x - position.x) * 0.045;
-      delta.y += (center.y - position.y) * 0.045;
+      delta.x += (center.x - position.x) * 0.075;
+      delta.y += (center.y - position.y) * 0.075;
     }
 
     const temperature = 0.12 * (1 - iteration / 220) + 0.012;

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { GraphEdge, InteractionData, SubagentInteraction } from "./graph";
 import type { AgentEntry } from "./monitor";
 
-const TIMELINE_LIMIT = 120;
+const TIMELINE_LIMIT = 200;
 const MAX_AGENTS = 60;
 const CONCURRENCY = 4;
 
@@ -74,6 +74,7 @@ export async function fetchInteractions(
   const messagesByAgent = new Map<string, number>();
   const edgeMap = new Map<string, GraphEdge>();
   const subagentMap = new Map<string, SubagentInteraction>();
+  let unreadable = 0;
   const addEdge = (from: string, to: string, count: number, kind: GraphEdge["kind"]) => {
     if (!from || !to || from === to) return;
     const key = `${from}>${to}`;
@@ -135,12 +136,18 @@ export async function fetchInteractions(
           }
         } catch {
           // Closed or unavailable agents simply contribute no interaction data.
+          unreadable += 1;
         }
       }),
     );
   }
 
-  return { messagesByAgent, edges: [...edgeMap.values()], subagents: [...subagentMap.values()] };
+  return {
+    messagesByAgent,
+    edges: [...edgeMap.values()],
+    subagents: [...subagentMap.values()],
+    unreadable,
+  };
 }
 
 export function useInteractionGraph(

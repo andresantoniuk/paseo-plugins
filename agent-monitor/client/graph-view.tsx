@@ -22,8 +22,6 @@ type GraphViewProps = {
   compact: boolean;
 };
 
-type Bounds = { minX: number; maxX: number; minY: number; maxY: number };
-
 const PALETTE = ["#7c9cff", "#34d399", "#fbbf24", "#f87171", "#c084fc", "#22d3ee", "#f472b6"];
 
 function colorIndex(key: string): number {
@@ -50,6 +48,7 @@ const clamp = (value: number, min: number, max: number): number =>
 
 export function AgentGraph({ entries, interactions, loading, theme, navigation }: GraphViewProps) {
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  const [workspaceFilter, setWorkspaceFilter] = useState<string | null>(null);
   const [providerFilter, setProviderFilter] = useState<string | null>(null);
   const [showSubagents, setShowSubagents] = useState(true);
   const [connectedOnly, setConnectedOnly] = useState(false);
@@ -66,7 +65,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
   useEffect(() => {
     setManual({});
     setSelectedId(null);
-  }, [projectFilter, providerFilter, showSubagents, connectedOnly]);
+  }, [projectFilter, workspaceFilter, providerFilter, showSubagents, connectedOnly]);
 
   const projectKeys = useMemo(() => {
     const map = new Map<string, string>();
@@ -77,6 +76,10 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     return map;
   }, [entries]);
   const projects = useMemo(() => [...projectKeys.keys()].sort(), [projectKeys]);
+  const workspaces = useMemo(
+    () => [...new Set(entries.map((entry) => entry.project.workspaceName?.trim()).filter(Boolean))].sort() as string[],
+    [entries],
+  );
   const providers = useMemo(
     () => [...new Set(entries.map((entry) => entry.agent.provider))].sort(),
     [entries],
@@ -86,9 +89,10 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
       entries.filter(
         (entry) =>
           (!projectFilter || entry.project.projectName === projectFilter) &&
+          (!workspaceFilter || entry.project.workspaceName === workspaceFilter) &&
           (!providerFilter || entry.agent.provider === providerFilter),
       ),
-    [entries, projectFilter, providerFilter],
+    [entries, projectFilter, workspaceFilter, providerFilter],
   );
   const layout = useMemo(
     () => buildGraph(filteredEntries, interactions, { includeSubagents: showSubagents }),
@@ -122,32 +126,48 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     () => layout.edges.filter((edge) => visibleIds.has(edge.from) && visibleIds.has(edge.to)),
     [layout.edges, visibleIds],
   );
-  const visibleClusters = useMemo(
-    () =>
-      layout.clusters
-        .map((cluster) => ({
-          ...cluster,
-          count: visibleNodes.filter((node) => node.colorKey === cluster.key).length,
-        }))
-        .filter((cluster) => cluster.count > 0),
-    [layout.clusters, visibleNodes],
-  );
-  const boundsByKey = useMemo(() => {
-    const map = new Map<string, Bounds>();
-    for (const cluster of layout.clusters) {
-      const minX = cluster.x + 10;
-      const maxX = cluster.x + cluster.width - NODE_WIDTH - 10;
-      const minY = cluster.y + 36;
-      const maxY = cluster.y + cluster.height - NODE_HEIGHT - 10;
-      if (maxX >= minX && maxY >= minY) map.set(cluster.key, { minX, maxX, minY, maxY });
-    }
-    return map;
-  }, [layout.clusters]);
-
   const positionOf = useCallback(
     (node: GraphNode) => manual[node.id] ?? { x: node.x, y: node.y },
     [manual],
   );
+
+  // The halo follows the cards, so dragging a node never leaves its group
+  // visually behind. It grows and shrinks with the members.
+  const clusterBoxes = useMemo(() => {
+    const groups = new Map<string, GraphNode[]>();
+    for (const node of visibleNodes) {
+      const list = groups.get(node.colorKey);
+      if (list) list.push(node);
+      else groups.set(node.colorKey, [node]);
+    }
+    const boxes: Array<{ key: string; name: string; count: number; x: number; y: number; width: number; height: number }> = [];
+    for (const [key, group] of groups) {
+      let left = Number.POSITIVE_INFINITY;
+      let top = Number.POSITIVE_INFINITY;
+      let right = Number.NEGATIVE_INFINITY;
+      let bottom = Number.NEGATIVE_INFINITY;
+      for (const node of group) {
+        const position = positionOf(node);
+        left = Math.min(left, position.x);
+        top = Math.min(top, position.y);
+        right = Math.max(right, position.x + NODE_WIDTH);
+        bottom = Math.max(bottom, position.y + NODE_HEIGHT);
+      }
+      if (!Number.isFinite(left)) continue;
+      const pad = 20;
+      const header = 30;
+      boxes.push({
+        key,
+        name: key.split(" · ")[0] || key,
+        count: group.length,
+        x: left - pad,
+        y: top - header - pad,
+        width: right - left + pad * 2,
+        height: bottom - top + pad * 2 + header,
+      });
+    }
+    return boxes.sort((left, right) => left.name.localeCompare(right.name));
+  }, [positionOf, visibleNodes]);
 
   const neighborIds = useMemo(() => {
     if (!selectedId) return new Set<string>();
@@ -161,20 +181,9 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
 
   const selected = selectedId ? visibleById.get(selectedId) ?? null : null;
 
-  const moveNode = useCallback(
-    (id: string, position: { x: number; y: number }, bounds: Bounds | undefined) => {
-      setManual((current) => ({
-        ...current,
-        [id]: bounds
-          ? {
-              x: clamp(position.x, bounds.minX, bounds.maxX),
-              y: clamp(position.y, bounds.minY, bounds.maxY),
-            }
-          : position,
-      }));
-    },
-    [],
-  );
+  const moveNode = useCallback((id: string, position: { x: number; y: number }) => {
+    setManual((current) => ({ ...current, [id]: position }));
+  }, []);
 
   const zoomBy = useCallback(
     (factor: number) => {
@@ -210,6 +219,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     setScale(1);
     setPan({ x: 0, y: 0 });
     setProjectFilter(null);
+    setWorkspaceFilter(null);
     setProviderFilter(null);
     setShowSubagents(true);
     setConnectedOnly(false);
@@ -302,6 +312,27 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             />
           ))}
         </ScrollView>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ gap: 6, paddingHorizontal: 14 }}
+        >
+          <Chip
+            label="All workspaces"
+            active={workspaceFilter === null}
+            theme={theme}
+            onPress={() => setWorkspaceFilter(null)}
+          />
+          {workspaces.map((workspace) => (
+            <Chip
+              key={workspace}
+              label={workspace}
+              active={workspaceFilter === workspace}
+              theme={theme}
+              onPress={() => setWorkspaceFilter(workspaceFilter === workspace ? null : workspace)}
+            />
+          ))}
+        </ScrollView>
         <View
           style={{
             flexDirection: "row",
@@ -349,6 +380,10 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
           </Pressable>
           {loading ? (
             <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>reading timelines…</Text>
+          ) : interactions?.unreadable ? (
+            <Text style={{ color: theme.colors.statusWarning, fontSize: 10 }}>
+              {interactions.unreadable} timelines unreadable
+            </Text>
           ) : null}
         </View>
       </View>
@@ -372,7 +407,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             transformOrigin: "left top",
           }}
         >
-          {visibleClusters.map((cluster) => {
+          {clusterBoxes.map((cluster) => {
             const color = PALETTE[colorIndex(cluster.key)];
             return (
               <View
@@ -489,7 +524,6 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                 key={node.id}
                 node={node}
                 position={position}
-                bounds={boundsByKey.get(node.colorKey)}
                 scale={scale}
                 dimmed={dimmed}
                 selected={selectedId === node.id}
@@ -653,7 +687,6 @@ function ZoomButton({
 function GraphNodeView({
   node,
   position,
-  bounds,
   scale,
   dimmed,
   selected,
@@ -663,26 +696,19 @@ function GraphNodeView({
 }: {
   node: GraphNode;
   position: { x: number; y: number };
-  bounds: Bounds | undefined;
   scale: number;
   dimmed: boolean;
   selected: boolean;
   theme: PluginSurfaceProps["theme"];
   onSelect: (id: string) => void;
-  onMove: (
-    id: string,
-    position: { x: number; y: number },
-    bounds: Bounds | undefined,
-  ) => void;
+  onMove: (id: string, position: { x: number; y: number }) => void;
 }) {
   const start = useRef({ x: 0, y: 0 });
   const moved = useRef(false);
   const positionRef = useRef(position);
   const scaleRef = useRef(scale);
-  const boundsRef = useRef(bounds);
   positionRef.current = position;
   scaleRef.current = scale;
-  boundsRef.current = bounds;
 
   const responder = useMemo(
     () =>
@@ -701,7 +727,7 @@ function GraphNodeView({
             x: start.current.x + gesture.dx / scaleRef.current,
             y: start.current.y + gesture.dy / scaleRef.current,
           };
-          onMove(node.id, next, boundsRef.current);
+          onMove(node.id, next);
         },
         onPanResponderRelease: () => {
           if (!moved.current) onSelect(node.id);
