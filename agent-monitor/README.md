@@ -42,6 +42,10 @@ no private organization names remained in the rendered page.
   falling back to `updatedAt`), model, and `lastError` inline.
 - Parent rows show their subagent count; child rows use a left indent guide.
 - Text filter over title, agent id, provider, model, cwd, project, and workspace.
+- **Graph view**: switch the header between Roster and Graph. The graph lays agents as a tree
+  (parent to child) and adds message edges derived from timeline provenance, with thickness
+  scaled by the number of messages exchanged. Each node shows its project, workspace, branch and
+  message count.
 - Select an agent row to open that agent, or select a workspace header (or its folder button when
   collapsed) to open its workspace through Paseo's cross-platform navigation API.
 - Archive one agent, or sweep every closed agent (two taps).

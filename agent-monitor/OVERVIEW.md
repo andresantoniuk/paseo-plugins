@@ -2,6 +2,8 @@ Agent monitor is one roster of every agent on a host, so you can see which ones 
 
 Settings control grouping, sort order, density, which details each row shows, and the default filter. They are stored per host and shared by every connected client.
 
+The header switches between the **Roster** and a **Graph** view. The graph lays agents out as a parent-child tree, draws message edges from timeline provenance, scales edge thickness by the number of messages exchanged, and labels each node with its project, workspace, branch and message count.
+
 It reads agent, workspace and project lists through the selected host's existing connection and opens no connection of its own. The one action it performs is archiving, either a single agent or all closed agents. It cannot interrupt a running turn.
 
 Requires Paseo ^0.12.0.
