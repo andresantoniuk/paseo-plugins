@@ -643,6 +643,25 @@ function AgentMonitorRoster({
           <Text style={styles.summary} numberOfLines={1} ellipsizeMode="tail">
             {entries.length} agents on {host.label}
           </Text>
+          <Text style={[styles.syncing, isFetching ? null : styles.syncingHidden]}>syncing</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Refresh agents"
+            onPress={() => void refetch()}
+            style={styles.refreshAction}
+          >
+            <Text style={styles.actionText}>Refresh</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open monitor settings"
+            onPress={onOpenSettings}
+            style={styles.gearButton}
+          >
+            <Icon name="Settings" size={16} color={theme.colors.foregroundMuted} />
+          </Pressable>
+        </View>
+        <View style={styles.chips}>
           <View style={styles.viewToggle}>
             <Pressable
               accessibilityRole="button"
@@ -669,25 +688,6 @@ function AgentMonitorRoster({
               </Text>
             </Pressable>
           </View>
-          <Text style={[styles.syncing, isFetching ? null : styles.syncingHidden]}>syncing</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Refresh agents"
-            onPress={() => void refetch()}
-            style={styles.refreshAction}
-          >
-            <Text style={styles.actionText}>Refresh</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open monitor settings"
-            onPress={onOpenSettings}
-            style={styles.gearButton}
-          >
-            <Icon name="Settings" size={16} color={theme.colors.foregroundMuted} />
-          </Pressable>
-        </View>
-        <View style={styles.chips}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Show all agents"
