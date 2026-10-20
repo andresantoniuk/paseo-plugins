@@ -207,180 +207,59 @@ export function buildGraph(
     mergeEdge(edgeMap, edge.from, edge.to, edge.count, edge.kind, "add");
   }
 
-  // One cluster per project/workspace, arranged on a ring. Nodes start on a
-  // smaller ring around their cluster and are then pulled toward it.
+  // Compact shelf layout: each project/workspace is a panel; panels wrap into
+  // rows and nodes inside a panel use one or two columns. Groups stay compact
+  // and readable instead of being scattered by a force simulation.
   const clusters = new Map<string, GraphNode[]>();
   for (const node of nodes) {
     const list = clusters.get(node.colorKey);
     if (list) list.push(node);
     else clusters.set(node.colorKey, [node]);
   }
-  const clusterKeys = [...clusters.keys()].sort();
-  const clusterCenters = new Map<string, { x: number; y: number }>();
-  const columns = Math.max(1, Math.ceil(Math.sqrt(clusterKeys.length)));
-  const columnGap = NODE_WIDTH * 2 + 180;
-  const rowGap = NODE_HEIGHT * 3 + 140;
-  clusterKeys.forEach((key, index) => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    clusterCenters.set(key, { x: column * columnGap, y: row * rowGap });
-  });
-
-  const positions = new Map<string, { x: number; y: number }>();
-  for (const [key, clusterNodes] of clusters) {
-    const center = clusterCenters.get(key);
-    if (!center) continue;
-    clusterNodes.forEach((node, index) => {
-      const angle = (index / Math.max(1, clusterNodes.length)) * Math.PI * 2;
-      const radius = 70 + Math.sqrt(clusterNodes.length) * 22;
-      positions.set(node.id, {
-        x: center.x + Math.cos(angle) * radius,
-        y: center.y + Math.sin(angle) * radius,
-      });
-    });
-  }
-
-  const nodeList = [...byId.values()];
-  const ideal = NODE_WIDTH + 90;
-  for (let iteration = 0; iteration < 220; iteration += 1) {
-    const displacement = new Map(nodeList.map((node) => [node.id, { x: 0, y: 0 }]));
-
-    for (let left = 0; left < nodeList.length; left += 1) {
-      for (let right = left + 1; right < nodeList.length; right += 1) {
-        const a = positions.get(nodeList[left].id);
-        const b = positions.get(nodeList[right].id);
-        if (!a || !b) continue;
-        let dx = a.x - b.x;
-        let dy = a.y - b.y;
-        let distance = Math.hypot(dx, dy);
-        if (distance < 0.01) {
-          dx = (left % 2 === 0 ? 1 : -1) * 0.5;
-          dy = (right % 2 === 0 ? 1 : -1) * 0.5;
-          distance = 0.7;
-        }
-        const force = (ideal * ideal) / distance;
-        const ux = dx / distance;
-        const uy = dy / distance;
-        const da = displacement.get(nodeList[left].id);
-        const db = displacement.get(nodeList[right].id);
-        if (da) {
-          da.x += ux * force;
-          da.y += uy * force;
-        }
-        if (db) {
-          db.x -= ux * force;
-          db.y -= uy * force;
-        }
-      }
-    }
-
-    for (const edge of edgeMap.values()) {
-      const a = positions.get(edge.from);
-      const b = positions.get(edge.to);
-      if (!a || !b) continue;
-      const dx = a.x - b.x;
-      const dy = a.y - b.y;
-      const distance = Math.hypot(dx, dy) || 0.01;
-      const weight = 1 + Math.min(2, Math.log2(edge.count + 1) * 0.6);
-      const force = ((distance * distance) / ideal) * weight * 0.35;
-      const ux = dx / distance;
-      const uy = dy / distance;
-      const da = displacement.get(edge.from);
-      const db = displacement.get(edge.to);
-      if (da) {
-        da.x -= ux * force;
-        da.y -= uy * force;
-      }
-      if (db) {
-        db.x += ux * force;
-        db.y += uy * force;
-      }
-    }
-
-    for (const node of nodeList) {
-      const position = positions.get(node.id);
-      const center = clusterCenters.get(node.colorKey);
-      const delta = displacement.get(node.id);
-      if (!position || !center || !delta) continue;
-      delta.x += (center.x - position.x) * 0.075;
-      delta.y += (center.y - position.y) * 0.075;
-    }
-
-    const temperature = 0.12 * (1 - iteration / 220) + 0.012;
-    for (const node of nodeList) {
-      const position = positions.get(node.id);
-      const delta = displacement.get(node.id);
-      if (!position || !delta) continue;
-      const length = Math.hypot(delta.x, delta.y) || 1;
-      const step = Math.min(length, temperature * 60);
-      position.x += (delta.x / length) * step;
-      position.y += (delta.y / length) * step;
-    }
-  }
-
-  // Resolve hard overlaps so cards stay readable even in dense clusters.
-  for (let pass = 0; pass < 16; pass += 1) {
-    for (let left = 0; left < nodeList.length; left += 1) {
-      for (let right = left + 1; right < nodeList.length; right += 1) {
-        const a = positions.get(nodeList[left].id);
-        const b = positions.get(nodeList[right].id);
-        if (!a || !b) continue;
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const overlapX = NODE_WIDTH + 18 - Math.abs(dx);
-        const overlapY = NODE_HEIGHT + 18 - Math.abs(dy);
-        if (overlapX <= 0 || overlapY <= 0) continue;
-        if (overlapX < overlapY) {
-          const push = (overlapX / 2) * (dx >= 0 ? 1 : -1);
-          a.x += push;
-          b.x -= push;
-        } else {
-          const push = (overlapY / 2) * (dy >= 0 ? 1 : -1);
-          a.y += push;
-          b.y -= push;
-        }
-      }
-    }
-  }
-
-  // Shift the cloud into positive coordinates.
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  for (const position of positions.values()) {
-    minX = Math.min(minX, position.x);
-    minY = Math.min(minY, position.y);
-  }
-  for (const node of nodeList) {
-    const position = positions.get(node.id);
-    if (!position) continue;
-    node.x = position.x - minX + GRAPH_PADDING;
-    node.y = position.y - minY + GRAPH_PADDING;
-  }
-
+  const clusterEntries = [...clusters.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
   const clusterSummaries: GraphCluster[] = [];
-  for (const [key, clusterNodes] of clusters) {
-    let left = Number.POSITIVE_INFINITY;
-    let top = Number.POSITIVE_INFINITY;
-    let right = Number.NEGATIVE_INFINITY;
-    let bottom = Number.NEGATIVE_INFINITY;
-    for (const node of clusterNodes) {
-      left = Math.min(left, node.x);
-      top = Math.min(top, node.y);
-      right = Math.max(right, node.x + NODE_WIDTH);
-      bottom = Math.max(bottom, node.y + NODE_HEIGHT);
+  const maxRowWidth = 1160;
+  let cursorX = GRAPH_PADDING;
+  let cursorY = GRAPH_PADDING;
+  let shelfHeight = 0;
+
+  for (const [key, clusterNodes] of clusterEntries) {
+    clusterNodes.sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === "agent" ? -1 : 1;
+      return left.title.localeCompare(right.title);
+    });
+    const columns = clusterNodes.length > 4 ? 2 : 1;
+    const rows = Math.ceil(clusterNodes.length / columns);
+    const panelWidth = columns * NODE_WIDTH + (columns - 1) * 16 + 32;
+    const panelHeight = rows * NODE_HEIGHT + Math.max(0, rows - 1) * 12 + 32 + 28;
+
+    if (cursorX > GRAPH_PADDING && cursorX + panelWidth > maxRowWidth) {
+      cursorX = GRAPH_PADDING;
+      cursorY += shelfHeight + 24;
+      shelfHeight = 0;
     }
-    if (!Number.isFinite(left)) continue;
-    const pad = 20;
-    const header = 30;
+
+    clusterNodes.forEach((node, index) => {
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      node.x = cursorX + 16 + column * (NODE_WIDTH + 16);
+      node.y = cursorY + 28 + 16 + row * (NODE_HEIGHT + 12);
+    });
+
     clusterSummaries.push({
       key,
       name: key.split(" · ")[0] || key,
-      x: left - pad,
-      y: top - header - pad,
-      width: right - left + pad * 2,
-      height: bottom - top + pad * 2 + header,
+      x: cursorX,
+      y: cursorY,
+      width: panelWidth,
+      height: panelHeight,
       count: clusterNodes.length,
     });
+
+    cursorX += panelWidth + 24;
+    shelfHeight = Math.max(shelfHeight, panelHeight);
   }
 
   const width = Math.max(
@@ -389,11 +268,11 @@ export function buildGraph(
   );
   const height = Math.max(
     NODE_HEIGHT + GRAPH_PADDING * 2,
-    ...clusterSummaries.map((cluster) => cluster.y + cluster.height + GRAPH_PADDING),
+    cursorY + shelfHeight + GRAPH_PADDING,
   );
 
   const finalEdges = [...edgeMap.values()].filter(
     (edge) => byId.has(edge.from) && byId.has(edge.to),
   );
-  return { nodes: nodeList, byId, edges: finalEdges, clusters: clusterSummaries, width, height };
+  return { nodes, byId, edges: finalEdges, clusters: clusterSummaries, width, height };
 }

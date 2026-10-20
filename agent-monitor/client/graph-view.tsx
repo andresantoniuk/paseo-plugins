@@ -47,6 +47,7 @@ const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
 export function AgentGraph({ entries, interactions, loading, theme, navigation }: GraphViewProps) {
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const [workspaceFilter, setWorkspaceFilter] = useState<string | null>(null);
   const [providerFilter, setProviderFilter] = useState<string | null>(null);
@@ -270,6 +271,13 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     [],
   );
 
+  const activeFilterCount =
+    (projectFilter ? 1 : 0) +
+    (workspaceFilter ? 1 : 0) +
+    (providerFilter ? 1 : 0) +
+    (showSubagents ? 0 : 1) +
+    (connectedOnly ? 1 : 0);
+
   if (entries.length === 0) {
     return (
       <View style={{ padding: 20 }}>
@@ -290,49 +298,6 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
           gap: 6,
         }}
       >
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 6, paddingHorizontal: 14 }}
-        >
-          <Chip
-            label="All projects"
-            active={projectFilter === null}
-            theme={theme}
-            onPress={() => setProjectFilter(null)}
-          />
-          {projects.map((project) => (
-            <Chip
-              key={project}
-              label={project}
-              color={PALETTE[colorIndex(projectKeys.get(project) ?? project)]}
-              active={projectFilter === project}
-              theme={theme}
-              onPress={() => setProjectFilter(projectFilter === project ? null : project)}
-            />
-          ))}
-        </ScrollView>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 6, paddingHorizontal: 14 }}
-        >
-          <Chip
-            label="All workspaces"
-            active={workspaceFilter === null}
-            theme={theme}
-            onPress={() => setWorkspaceFilter(null)}
-          />
-          {workspaces.map((workspace) => (
-            <Chip
-              key={workspace}
-              label={workspace}
-              active={workspaceFilter === workspace}
-              theme={theme}
-              onPress={() => setWorkspaceFilter(workspaceFilter === workspace ? null : workspace)}
-            />
-          ))}
-        </ScrollView>
         <View
           style={{
             flexDirection: "row",
@@ -342,33 +307,31 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             paddingHorizontal: 14,
           }}
         >
-          <Chip
-            label="All providers"
-            active={providerFilter === null}
-            theme={theme}
-            onPress={() => setProviderFilter(null)}
-          />
-          {providers.map((provider) => (
-            <Chip
-              key={provider}
-              label={provider}
-              active={providerFilter === provider}
-              theme={theme}
-              onPress={() => setProviderFilter(providerFilter === provider ? null : provider)}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={filtersOpen ? "Hide filters" : "Show filters"}
+            onPress={() => setFiltersOpen((value) => !value)}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 4,
+              minHeight: 26,
+              paddingHorizontal: 8,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.surface1,
+            }}
+          >
+            <Icon
+              name={filtersOpen ? "ChevronDown" : "ChevronRight"}
+              size={12}
+              color={theme.colors.foregroundMuted}
             />
-          ))}
-          <Chip
-            label={`Subagents ${subagentCount}`}
-            active={showSubagents}
-            theme={theme}
-            onPress={() => setShowSubagents((value) => !value)}
-          />
-          <Chip
-            label="Connected only"
-            active={connectedOnly}
-            theme={theme}
-            onPress={() => setConnectedOnly((value) => !value)}
-          />
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
+              Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+            </Text>
+          </Pressable>
           <Chip label="Fit" active={false} theme={theme} onPress={fit} />
           <ZoomButton label="−" theme={theme} onPress={() => zoomBy(1 / 1.2)} />
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10, minWidth: 34 }}>
@@ -386,6 +349,92 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             </Text>
           ) : null}
         </View>
+        {filtersOpen ? (
+          <>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: 6, paddingHorizontal: 14 }}
+            >
+              <Chip
+                label="All projects"
+                active={projectFilter === null}
+                theme={theme}
+                onPress={() => setProjectFilter(null)}
+              />
+              {projects.map((project) => (
+                <Chip
+                  key={project}
+                  label={project}
+                  color={PALETTE[colorIndex(projectKeys.get(project) ?? project)]}
+                  active={projectFilter === project}
+                  theme={theme}
+                  onPress={() => setProjectFilter(projectFilter === project ? null : project)}
+                />
+              ))}
+            </ScrollView>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: 6, paddingHorizontal: 14 }}
+            >
+              <Chip
+                label="All workspaces"
+                active={workspaceFilter === null}
+                theme={theme}
+                onPress={() => setWorkspaceFilter(null)}
+              />
+              {workspaces.map((workspace) => (
+                <Chip
+                  key={workspace}
+                  label={workspace}
+                  active={workspaceFilter === workspace}
+                  theme={theme}
+                  onPress={() =>
+                    setWorkspaceFilter(workspaceFilter === workspace ? null : workspace)
+                  }
+                />
+              ))}
+            </ScrollView>
+            <View
+              style={{
+                flexDirection: "row",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: 6,
+                paddingHorizontal: 14,
+              }}
+            >
+              <Chip
+                label="All providers"
+                active={providerFilter === null}
+                theme={theme}
+                onPress={() => setProviderFilter(null)}
+              />
+              {providers.map((provider) => (
+                <Chip
+                  key={provider}
+                  label={provider}
+                  active={providerFilter === provider}
+                  theme={theme}
+                  onPress={() => setProviderFilter(providerFilter === provider ? null : provider)}
+                />
+              ))}
+              <Chip
+                label={`Subagents ${subagentCount}`}
+                active={showSubagents}
+                theme={theme}
+                onPress={() => setShowSubagents((value) => !value)}
+              />
+              <Chip
+                label="Connected only"
+                active={connectedOnly}
+                theme={theme}
+                onPress={() => setConnectedOnly((value) => !value)}
+              />
+            </View>
+          </>
+        ) : null}
       </View>
 
       <View
@@ -397,14 +446,18 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
           })
         }
         ref={canvasRef}
-        {...canvasPan.panHandlers}
       >
+        <View
+          style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
+          {...canvasPan.panHandlers}
+        />
         <View
           style={{
             width: layout.width,
             height: layout.height,
             transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale }],
             transformOrigin: "left top",
+            pointerEvents: "box-none",
           }}
         >
           {clusterBoxes.map((cluster) => {
@@ -468,6 +521,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             return (
               <View
                 key={`${edge.from}>${edge.to}`}
+                pointerEvents="none"
                 style={{
                   position: "absolute",
                   left: x1,
@@ -497,6 +551,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             return (
               <View
                 key={`label-${edge.from}>${edge.to}`}
+                pointerEvents="none"
                 style={{
                   position: "absolute",
                   left: x - 12,
