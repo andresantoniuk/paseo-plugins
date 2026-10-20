@@ -54,6 +54,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
   const [showSubagents, setShowSubagents] = useState(true);
   const [connectedOnly, setConnectedOnly] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<{ from: string; to: string } | null>(null);
   const [manual, setManual] = useState<Record<string, { x: number; y: number }>>({});
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -61,11 +62,13 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
   const canvasRef = useRef<View>(null);
   const panRef = useRef(pan);
   const panStart = useRef({ x: 0, y: 0 });
+  const canvasMoved = useRef(false);
   panRef.current = pan;
 
   useEffect(() => {
     setManual({});
     setSelectedId(null);
+    setSelectedEdge(null);
   }, [projectFilter, workspaceFilter, providerFilter, showSubagents, connectedOnly]);
 
   const projectKeys = useMemo(() => {
@@ -170,20 +173,70 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     return boxes.sort((left, right) => left.name.localeCompare(right.name));
   }, [positionOf, visibleNodes]);
 
-  const neighborIds = useMemo(() => {
-    if (!selectedId) return new Set<string>();
+  const focusIds = useMemo(() => {
+    if (selectedEdge) return new Set([selectedEdge.from, selectedEdge.to]);
+    if (!selectedId) return null;
     const ids = new Set<string>([selectedId]);
     for (const edge of visibleEdges) {
       if (edge.from === selectedId) ids.add(edge.to);
       if (edge.to === selectedId) ids.add(edge.from);
     }
     return ids;
-  }, [selectedId, visibleEdges]);
+  }, [selectedEdge, selectedId, visibleEdges]);
+
+  const focusedClusterKeys = useMemo(() => {
+    if (!focusIds) return null;
+    const keys = new Set<string>();
+    for (const node of visibleNodes) {
+      if (focusIds.has(node.id)) keys.add(node.colorKey);
+    }
+    return keys;
+  }, [focusIds, visibleNodes]);
+
+  const selectedEdgeNodes = useMemo(() => {
+    if (!selectedEdge) return null;
+    const from = visibleById.get(selectedEdge.from);
+    const to = visibleById.get(selectedEdge.to);
+    if (!from || !to) return null;
+    const edge = visibleEdges.find(
+      (candidate) => candidate.from === selectedEdge.from && candidate.to === selectedEdge.to,
+    );
+    return edge ? { edge, from, to } : null;
+  }, [selectedEdge, visibleById, visibleEdges]);
 
   const selected = selectedId ? visibleById.get(selectedId) ?? null : null;
 
+  useEffect(() => {
+    if (selectedId && !visibleById.has(selectedId)) setSelectedId(null);
+    if (
+      selectedEdge &&
+      !visibleEdges.some(
+        (edge) => edge.from === selectedEdge.from && edge.to === selectedEdge.to,
+      )
+    ) {
+      setSelectedEdge(null);
+    }
+  }, [selectedEdge, selectedId, visibleById, visibleEdges]);
+
   const moveNode = useCallback((id: string, position: { x: number; y: number }) => {
     setManual((current) => ({ ...current, [id]: position }));
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedId(null);
+    setSelectedEdge(null);
+  }, []);
+
+  const selectNode = useCallback((id: string) => {
+    setSelectedEdge(null);
+    setSelectedId((current) => (current === id ? null : id));
+  }, []);
+
+  const selectEdge = useCallback((from: string, to: string) => {
+    setSelectedId(null);
+    setSelectedEdge((current) =>
+      current?.from === from && current?.to === to ? null : { from, to },
+    );
   }, []);
 
   const zoomBy = useCallback(
@@ -216,6 +269,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
 
   const resetView = useCallback(() => {
     setSelectedId(null);
+    setSelectedEdge(null);
     setManual({});
     setScale(1);
     setPan({ x: 0, y: 0 });
@@ -258,17 +312,23 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
   const canvasPan = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
+        // Claim taps too, so a click on empty canvas clears the focus.
+        onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: (_event, gesture) =>
           Math.abs(gesture.dx) > 3 || Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
           panStart.current = panRef.current;
+          canvasMoved.current = false;
         },
         onPanResponderMove: (_event, gesture) => {
+          if (Math.abs(gesture.dx) > 3 || Math.abs(gesture.dy) > 3) canvasMoved.current = true;
           setPan({ x: panStart.current.x + gesture.dx, y: panStart.current.y + gesture.dy });
         },
+        onPanResponderRelease: () => {
+          if (!canvasMoved.current) clearSelection();
+        },
       }),
-    [],
+    [clearSelection],
   );
 
   const activeFilterCount =
@@ -462,6 +522,8 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
         >
           {clusterBoxes.map((cluster) => {
             const color = PALETTE[colorIndex(cluster.key)];
+            const clusterDimmed =
+              focusedClusterKeys !== null && !focusedClusterKeys.has(cluster.key);
             return (
               <View
                 key={cluster.key}
@@ -476,6 +538,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                   backgroundColor: color + "10",
                   borderWidth: 1,
                   borderColor: color + "33",
+                  opacity: clusterDimmed ? 0.18 : 1,
                 }}
               >
                 <Text
@@ -511,30 +574,56 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             const length = Math.hypot(dx, dy);
             const angle = Math.atan2(dy, dx);
             const thickness = edgeThickness(edge.count);
-            const active = !selectedId || edge.from === selectedId || edge.to === selectedId;
-            const color =
-              edge.kind === "message"
+            const edgeSelected =
+              selectedEdge !== null &&
+              edge.from === selectedEdge.from &&
+              edge.to === selectedEdge.to;
+            const active = selectedEdge
+              ? edgeSelected
+              : selectedId
+                ? edge.from === selectedId || edge.to === selectedId
+                : true;
+            const color = edgeSelected
+              ? theme.colors.accent
+              : edge.kind === "message"
                 ? theme.colors.accent
                 : edge.kind === "subagent"
                   ? theme.colors.statusWarning
                   : theme.colors.border;
+            const hitHeight = Math.max(12, thickness);
             return (
-              <View
+              <Pressable
                 key={`${edge.from}>${edge.to}`}
-                pointerEvents="none"
+                accessibilityRole="button"
+                accessibilityLabel={`Select connection from ${from.title} to ${to.title}`}
+                onPress={() => selectEdge(edge.from, edge.to)}
                 style={{
                   position: "absolute",
                   left: x1,
-                  top: y1 - thickness / 2,
+                  top: y1 - hitHeight / 2,
                   width: length,
-                  height: thickness,
-                  borderRadius: thickness / 2,
-                  backgroundColor: color,
-                  opacity: active ? (edge.kind === "tree" ? 0.7 : 0.85) : 0.1,
+                  height: hitHeight,
+                  justifyContent: "center",
                   transform: [{ rotate: `${angle}rad` }],
                   transformOrigin: "left center",
+                  ...(Platform.OS === "web" ? { cursor: "pointer" } : null),
                 }}
-              />
+              >
+                <View
+                  style={{
+                    height: edgeSelected ? thickness + 2 : thickness,
+                    borderRadius: thickness / 2,
+                    backgroundColor: color,
+                    opacity: active
+                      ? edgeSelected
+                        ? 1
+                        : edge.kind === "tree"
+                          ? 0.7
+                          : 0.85
+                      : 0.06,
+                  }}
+                />
+              </Pressable>
             );
           })}
 
@@ -548,10 +637,21 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             const b = positionOf(to);
             const x = (a.x + b.x + NODE_WIDTH) / 2;
             const y = (a.y + b.y + NODE_HEIGHT) / 2;
+            const edgeSelected =
+              selectedEdge !== null &&
+              edge.from === selectedEdge.from &&
+              edge.to === selectedEdge.to;
+            const active = selectedEdge
+              ? edgeSelected
+              : selectedId
+                ? edge.from === selectedId || edge.to === selectedId
+                : true;
             return (
-              <View
+              <Pressable
                 key={`label-${edge.from}>${edge.to}`}
-                pointerEvents="none"
+                accessibilityRole="button"
+                accessibilityLabel={`Select connection from ${from.title} to ${to.title}`}
+                onPress={() => selectEdge(edge.from, edge.to)}
                 style={{
                   position: "absolute",
                   left: x - 12,
@@ -562,18 +662,30 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                   borderRadius: 8,
                   backgroundColor: theme.colors.surface0,
                   borderWidth: 1,
-                  borderColor: theme.colors.border + "66",
+                  borderColor: edgeSelected ? theme.colors.accent : theme.colors.border + "66",
                   alignItems: "center",
+                  opacity: active ? 1 : 0.25,
+                  ...(Platform.OS === "web" ? { cursor: "pointer" } : null),
                 }}
               >
-                <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>{label}</Text>
-              </View>
+                <Text
+                  style={{
+                    color: edgeSelected ? theme.colors.accent : theme.colors.foregroundMuted,
+                    fontSize: 9,
+                  }}
+                >
+                  {label}
+                </Text>
+              </Pressable>
             );
           })}
 
           {visibleNodes.map((node) => {
             const position = positionOf(node);
-            const dimmed = selectedId !== null && !neighborIds.has(node.id);
+            const dimmed = focusIds !== null && !focusIds.has(node.id);
+            const edgeEndpoint =
+              selectedEdge !== null &&
+              (selectedEdge.from === node.id || selectedEdge.to === node.id);
             return (
               <GraphNodeView
                 key={node.id}
@@ -581,9 +693,9 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                 position={position}
                 scale={scale}
                 dimmed={dimmed}
-                selected={selectedId === node.id}
+                selected={selectedId === node.id || edgeEndpoint}
                 theme={theme}
-                onSelect={setSelectedId}
+                onSelect={selectNode}
                 onMove={moveNode}
               />
             );
@@ -658,6 +770,59 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                 </Text>
               </Pressable>
             ) : null}
+          </View>
+        ) : null}
+
+        {selectedEdgeNodes ? (
+          <View
+            style={{
+              position: "absolute",
+              left: 16,
+              right: 16,
+              bottom: 16,
+              backgroundColor: theme.colors.surface1,
+              borderWidth: 1,
+              borderColor: theme.colors.accent + "88",
+              borderRadius: 10,
+              padding: 12,
+              gap: 3,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Icon name="GitBranch" size={14} color={theme.colors.accent} />
+              <Text
+                style={{
+                  flex: 1,
+                  color: theme.colors.foreground,
+                  fontSize: 13,
+                  fontWeight: "700",
+                }}
+              >
+                {selectedEdgeNodes.edge.kind === "message"
+                  ? "Message link"
+                  : selectedEdgeNodes.edge.kind === "subagent"
+                    ? "Subagent link"
+                    : "Hierarchy link"}
+              </Text>
+              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+                {selectedEdgeNodes.edge.count}{" "}
+                {selectedEdgeNodes.edge.count === 1 ? "message" : "messages"}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close connection details"
+                onPress={() => setSelectedEdge(null)}
+                style={{ padding: 4 }}
+              >
+                <Icon name="X" size={14} color={theme.colors.foregroundMuted} />
+              </Pressable>
+            </View>
+            <Text
+              numberOfLines={2}
+              style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}
+            >
+              {selectedEdgeNodes.from.title} ↔ {selectedEdgeNodes.to.title}
+            </Text>
           </View>
         ) : null}
       </View>
@@ -814,7 +979,7 @@ function GraphNodeView({
         borderStyle: node.kind === "subagent" ? "dashed" : "solid",
         borderColor: border,
         backgroundColor: theme.colors.surface1,
-        opacity: dimmed ? 0.2 : 1,
+        opacity: dimmed ? 0.12 : 1,
         gap: 2,
       }}
     >
