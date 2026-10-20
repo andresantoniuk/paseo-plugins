@@ -86,6 +86,30 @@ describe("buildGraph", () => {
     expect(layout.edges).toEqual([{ from: "a", to: "b", count: 3, kind: "message" }]);
   });
 
+  it("turns provider subagent calls into child nodes", () => {
+    const layout = buildGraph([entry("parent")], {
+      messagesByAgent: new Map(),
+      edges: [],
+      subagents: [
+        {
+          parentId: "parent",
+          id: "research",
+          label: "Research",
+          kind: "general-purpose",
+          count: 3,
+        },
+      ],
+    });
+
+    const subagent = layout.nodes.find((node) => node.kind === "subagent");
+    expect(subagent?.title).toBe("Research");
+    expect(subagent?.messageCount).toBe(3);
+    expect(layout.edges).toEqual([
+      { from: "parent", to: subagent?.id, count: 3, kind: "subagent" },
+    ]);
+    expect(layout.clusters).toHaveLength(1);
+  });
+
   it("keeps every node when a parent cycle is malformed", () => {
     const a = entry("a", { parent: "b" });
     const b = entry("b", { parent: "a" });

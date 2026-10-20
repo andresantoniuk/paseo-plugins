@@ -1,7 +1,7 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
-import { useCallback, useMemo, useRef, useState } from "react";
-import { PanResponder, Pressable, ScrollView, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PanResponder, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import {
   buildGraph,
   edgeLabel,
@@ -21,6 +21,8 @@ type GraphViewProps = {
   navigation: PluginSurfaceProps["navigation"];
   compact: boolean;
 };
+
+type Bounds = { minX: number; maxX: number; minY: number; maxY: number };
 
 const PALETTE = ["#7c9cff", "#34d399", "#fbbf24", "#f87171", "#c084fc", "#22d3ee", "#f472b6"];
 
@@ -43,7 +45,8 @@ function statusColor(node: GraphNode, theme: PluginSurfaceProps["theme"]): strin
   return theme.colors.foregroundMuted;
 }
 
-const projectNameOf = (node: GraphNode): string => node.colorKey.split(" · ")[0] || "Project";
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max);
 
 export function AgentGraph({ entries, interactions, loading, theme, navigation }: GraphViewProps) {
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
@@ -53,7 +56,17 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [manual, setManual] = useState<Record<string, { x: number; y: number }>>({});
   const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const canvasRef = useRef<View>(null);
+  const panRef = useRef(pan);
+  const panStart = useRef({ x: 0, y: 0 });
+  panRef.current = pan;
+
+  useEffect(() => {
+    setManual({});
+    setSelectedId(null);
+  }, [projectFilter, providerFilter, showSubagents, connectedOnly]);
 
   const projectKeys = useMemo(() => {
     const map = new Map<string, string>();
@@ -119,6 +132,17 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
         .filter((cluster) => cluster.count > 0),
     [layout.clusters, visibleNodes],
   );
+  const boundsByKey = useMemo(() => {
+    const map = new Map<string, Bounds>();
+    for (const cluster of layout.clusters) {
+      const minX = cluster.x + 10;
+      const maxX = cluster.x + cluster.width - NODE_WIDTH - 10;
+      const minY = cluster.y + 36;
+      const maxY = cluster.y + cluster.height - NODE_HEIGHT - 10;
+      if (maxX >= minX && maxY >= minY) map.set(cluster.key, { minX, maxX, minY, maxY });
+    }
+    return map;
+  }, [layout.clusters]);
 
   const positionOf = useCallback(
     (node: GraphNode) => manual[node.id] ?? { x: node.x, y: node.y },
@@ -137,30 +161,104 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
 
   const selected = selectedId ? visibleById.get(selectedId) ?? null : null;
 
-  const moveNode = useCallback((id: string, position: { x: number; y: number }) => {
-    setManual((current) => ({ ...current, [id]: position }));
-  }, []);
+  const moveNode = useCallback(
+    (id: string, position: { x: number; y: number }, bounds: Bounds | undefined) => {
+      setManual((current) => ({
+        ...current,
+        [id]: bounds
+          ? {
+              x: clamp(position.x, bounds.minX, bounds.maxX),
+              y: clamp(position.y, bounds.minY, bounds.maxY),
+            }
+          : position,
+      }));
+    },
+    [],
+  );
+
+  const zoomBy = useCallback(
+    (factor: number) => {
+      const next = clamp(scale * factor, 0.3, 2.5);
+      const ratio = next / scale;
+      setPan((current) => ({
+        x: viewport.width / 2 - (viewport.width / 2 - current.x) * ratio,
+        y: viewport.height / 2 - (viewport.height / 2 - current.y) * ratio,
+      }));
+      setScale(next);
+    },
+    [scale, viewport.height, viewport.width],
+  );
+
+  const fit = useCallback(() => {
+    if (!viewport.width || !viewport.height || !layout.width || !layout.height) return;
+    const next = clamp(
+      Math.min((viewport.width - 40) / layout.width, (viewport.height - 40) / layout.height),
+      0.3,
+      1.4,
+    );
+    setScale(next);
+    setPan({
+      x: (viewport.width - layout.width * next) / 2,
+      y: (viewport.height - layout.height * next) / 2,
+    });
+    setManual({});
+  }, [layout.height, layout.width, viewport.height, viewport.width]);
 
   const resetView = useCallback(() => {
     setSelectedId(null);
     setManual({});
     setScale(1);
+    setPan({ x: 0, y: 0 });
     setProjectFilter(null);
     setProviderFilter(null);
     setShowSubagents(true);
     setConnectedOnly(false);
   }, []);
 
-  const fit = useCallback(() => {
-    if (!viewport.width || !viewport.height || !layout.width || !layout.height) return;
-    const next = Math.min(
-      (viewport.width - 40) / layout.width,
-      (viewport.height - 40) / layout.height,
-      1.4,
-    );
-    setScale(Math.max(0.35, next));
-    setManual({});
-  }, [viewport.height, viewport.width, layout.height, layout.width]);
+  const handleWheel = useCallback(
+    (event: unknown) => {
+      const wheel = event as {
+        preventDefault?: () => void;
+        deltaY?: number;
+        ctrlKey?: boolean;
+      };
+      wheel.preventDefault?.();
+      const delta = Number(wheel.deltaY ?? 0);
+      if (!Number.isFinite(delta) || delta === 0) return;
+      // Trackpad pinch arrives as a ctrl+wheel with small deltas.
+      const intensity = wheel.ctrlKey ? 0.012 : 0.003;
+      zoomBy(Math.exp(-delta * intensity));
+    },
+    [zoomBy],
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const node = canvasRef.current as unknown as {
+      addEventListener?: (name: string, handler: (event: unknown) => void, options?: unknown) => void;
+      removeEventListener?: (name: string, handler: (event: unknown) => void) => void;
+    } | null;
+    if (!node?.addEventListener || !node.removeEventListener) return;
+    const listener = (event: unknown) => handleWheel(event);
+    node.addEventListener("wheel", listener, { passive: false });
+    return () => node.removeEventListener?.("wheel", listener);
+  }, [handleWheel]);
+
+  const canvasPan = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          Math.abs(gesture.dx) > 3 || Math.abs(gesture.dy) > 3,
+        onPanResponderGrant: () => {
+          panStart.current = panRef.current;
+        },
+        onPanResponderMove: (_event, gesture) => {
+          setPan({ x: panStart.current.x + gesture.dx, y: panStart.current.y + gesture.dy });
+        },
+      }),
+    [],
+  );
 
   if (entries.length === 0) {
     return (
@@ -171,9 +269,6 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
       </View>
     );
   }
-
-  const scaledWidth = layout.width * scale;
-  const scaledHeight = layout.height * scale;
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.surface0 }}>
@@ -244,11 +339,11 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             onPress={() => setConnectedOnly((value) => !value)}
           />
           <Chip label="Fit" active={false} theme={theme} onPress={fit} />
-          <ZoomButton label="−" theme={theme} onPress={() => setScale((value) => Math.max(0.35, value - 0.15))} />
+          <ZoomButton label="−" theme={theme} onPress={() => zoomBy(1 / 1.2)} />
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10, minWidth: 34 }}>
             {Math.round(scale * 100)}%
           </Text>
-          <ZoomButton label="+" theme={theme} onPress={() => setScale((value) => Math.min(2.5, value + 0.15))} />
+          <ZoomButton label="+" theme={theme} onPress={() => zoomBy(1.2)} />
           <Pressable onPress={resetView} style={{ paddingHorizontal: 6, paddingVertical: 4 }}>
             <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>Reset</Text>
           </Pressable>
@@ -259,154 +354,152 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
       </View>
 
       <View
-        style={{ flex: 1 }}
+        style={{ flex: 1, overflow: "hidden" }}
         onLayout={(event) =>
           setViewport({
             width: event.nativeEvent.layout.width,
             height: event.nativeEvent.layout.height,
           })
         }
+        ref={canvasRef}
+        {...canvasPan.panHandlers}
       >
-        <ScrollView horizontal contentContainerStyle={{ width: scaledWidth }}>
-          <ScrollView
-            nestedScrollEnabled
-            contentContainerStyle={{ width: scaledWidth, height: scaledHeight }}
-          >
-            <View
-              style={{
-                width: layout.width,
-                height: layout.height,
-                transform: [{ scale }],
-                transformOrigin: "left top",
-              }}
-            >
-              {visibleClusters.map((cluster) => {
-                const color = PALETTE[colorIndex(cluster.key)];
-                return (
-                  <View
-                    key={cluster.key}
-                    pointerEvents="none"
-                    style={{
-                      position: "absolute",
-                      left: cluster.x,
-                      top: cluster.y,
-                      width: cluster.width,
-                      height: cluster.height,
-                      borderRadius: 16,
-                      backgroundColor: color + "10",
-                      borderWidth: 1,
-                      borderColor: color + "33",
-                    }}
-                  >
-                    <Text
-                      style={{
-                        position: "absolute",
-                        left: 12,
-                        top: 8,
-                        color,
-                        fontSize: 11,
-                        fontWeight: "700",
-                      }}
-                    >
-                      {cluster.name} · {cluster.count}
-                    </Text>
-                  </View>
-                );
-              })}
+        <View
+          style={{
+            width: layout.width,
+            height: layout.height,
+            transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale }],
+            transformOrigin: "left top",
+          }}
+        >
+          {visibleClusters.map((cluster) => {
+            const color = PALETTE[colorIndex(cluster.key)];
+            return (
+              <View
+                key={cluster.key}
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  left: cluster.x,
+                  top: cluster.y,
+                  width: cluster.width,
+                  height: cluster.height,
+                  borderRadius: 16,
+                  backgroundColor: color + "10",
+                  borderWidth: 1,
+                  borderColor: color + "33",
+                }}
+              >
+                <Text
+                  style={{
+                    position: "absolute",
+                    left: 12,
+                    top: 8,
+                    color,
+                    fontSize: 11,
+                    fontWeight: "700",
+                  }}
+                >
+                  {cluster.name} · {cluster.count}
+                </Text>
+              </View>
+            );
+          })}
 
-              {visibleEdges.map((edge) => {
-                const from = visibleById.get(edge.from);
-                const to = visibleById.get(edge.to);
-                if (!from || !to) return null;
-                const a = positionOf(from);
-                const b = positionOf(to);
-                const x1 = a.x + NODE_WIDTH;
-                const y1 = a.y + NODE_HEIGHT / 2;
-                const x2 = b.x;
-                const y2 = b.y + NODE_HEIGHT / 2;
-                const dx = x2 - x1;
-                const dy = y2 - y1;
-                const length = Math.hypot(dx, dy);
-                const angle = Math.atan2(dy, dx);
-                const thickness = edgeThickness(edge.count);
-                const active = !selectedId || edge.from === selectedId || edge.to === selectedId;
-                const color =
-                  edge.kind === "message"
-                    ? theme.colors.accent
-                    : edge.kind === "subagent"
-                      ? theme.colors.statusWarning
-                      : theme.colors.border;
-                return (
-                  <View
-                    key={`${edge.from}>${edge.to}`}
-                    style={{
-                      position: "absolute",
-                      left: x1,
-                      top: y1 - thickness / 2,
-                      width: length,
-                      height: thickness,
-                      borderRadius: thickness / 2,
-                      backgroundColor: color,
-                      opacity: active ? (edge.kind === "tree" ? 0.7 : 0.85) : 0.1,
-                      transform: [{ rotate: `${angle}rad` }],
-                      transformOrigin: "left center",
-                    }}
-                  />
-                );
-              })}
+          {visibleEdges.map((edge) => {
+            const from = visibleById.get(edge.from);
+            const to = visibleById.get(edge.to);
+            if (!from || !to) return null;
+            const a = positionOf(from);
+            const b = positionOf(to);
+            // Center to center: the line is drawn behind the cards, so it
+            // appears to emerge from each card's middle.
+            const x1 = a.x + NODE_WIDTH / 2;
+            const y1 = a.y + NODE_HEIGHT / 2;
+            const x2 = b.x + NODE_WIDTH / 2;
+            const y2 = b.y + NODE_HEIGHT / 2;
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const length = Math.hypot(dx, dy);
+            const angle = Math.atan2(dy, dx);
+            const thickness = edgeThickness(edge.count);
+            const active = !selectedId || edge.from === selectedId || edge.to === selectedId;
+            const color =
+              edge.kind === "message"
+                ? theme.colors.accent
+                : edge.kind === "subagent"
+                  ? theme.colors.statusWarning
+                  : theme.colors.border;
+            return (
+              <View
+                key={`${edge.from}>${edge.to}`}
+                style={{
+                  position: "absolute",
+                  left: x1,
+                  top: y1 - thickness / 2,
+                  width: length,
+                  height: thickness,
+                  borderRadius: thickness / 2,
+                  backgroundColor: color,
+                  opacity: active ? (edge.kind === "tree" ? 0.7 : 0.85) : 0.1,
+                  transform: [{ rotate: `${angle}rad` }],
+                  transformOrigin: "left center",
+                }}
+              />
+            );
+          })}
 
-              {visibleEdges.map((edge) => {
-                const label = edgeLabel(edge.count);
-                if (!label) return null;
-                const from = visibleById.get(edge.from);
-                const to = visibleById.get(edge.to);
-                if (!from || !to) return null;
-                const a = positionOf(from);
-                const b = positionOf(to);
-                const x = (a.x + NODE_WIDTH + b.x) / 2;
-                const y = (a.y + b.y) / 2 + NODE_HEIGHT / 2;
-                return (
-                  <View
-                    key={`label-${edge.from}>${edge.to}`}
-                    style={{
-                      position: "absolute",
-                      left: x - 12,
-                      top: y - 10,
-                      minWidth: 24,
-                      paddingHorizontal: 4,
-                      paddingVertical: 1,
-                      borderRadius: 8,
-                      backgroundColor: theme.colors.surface0,
-                      borderWidth: 1,
-                      borderColor: theme.colors.border + "66",
-                      alignItems: "center",
-                    }}
-                  >
-                    <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>{label}</Text>
-                  </View>
-                );
-              })}
+          {visibleEdges.map((edge) => {
+            const label = edgeLabel(edge.count);
+            if (!label) return null;
+            const from = visibleById.get(edge.from);
+            const to = visibleById.get(edge.to);
+            if (!from || !to) return null;
+            const a = positionOf(from);
+            const b = positionOf(to);
+            const x = (a.x + b.x + NODE_WIDTH) / 2;
+            const y = (a.y + b.y + NODE_HEIGHT) / 2;
+            return (
+              <View
+                key={`label-${edge.from}>${edge.to}`}
+                style={{
+                  position: "absolute",
+                  left: x - 12,
+                  top: y - 10,
+                  minWidth: 24,
+                  paddingHorizontal: 4,
+                  paddingVertical: 1,
+                  borderRadius: 8,
+                  backgroundColor: theme.colors.surface0,
+                  borderWidth: 1,
+                  borderColor: theme.colors.border + "66",
+                  alignItems: "center",
+                }}
+              >
+                <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>{label}</Text>
+              </View>
+            );
+          })}
 
-              {visibleNodes.map((node) => {
-                const position = positionOf(node);
-                const dimmed = selectedId !== null && !neighborIds.has(node.id);
-                return (
-                  <GraphNodeView
-                    key={node.id}
-                    node={node}
-                    position={position}
-                    scale={scale}
-                    dimmed={dimmed}
-                    selected={selectedId === node.id}
-                    theme={theme}
-                    onSelect={setSelectedId}
-                    onMove={moveNode}
-                  />
-                );
-              })}
-            </View>
-          </ScrollView>
-        </ScrollView>
+          {visibleNodes.map((node) => {
+            const position = positionOf(node);
+            const dimmed = selectedId !== null && !neighborIds.has(node.id);
+            return (
+              <GraphNodeView
+                key={node.id}
+                node={node}
+                position={position}
+                bounds={boundsByKey.get(node.colorKey)}
+                scale={scale}
+                dimmed={dimmed}
+                selected={selectedId === node.id}
+                theme={theme}
+                onSelect={setSelectedId}
+                onMove={moveNode}
+              />
+            );
+          })}
+        </View>
 
         {selected ? (
           <View
@@ -514,9 +607,7 @@ function Chip({
         backgroundColor: active ? theme.colors.accent : theme.colors.surface1,
       }}
     >
-      {color ? (
-        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color }} />
-      ) : null}
+      {color ? <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color }} /> : null}
       <Text
         numberOfLines={1}
         style={{
@@ -562,6 +653,7 @@ function ZoomButton({
 function GraphNodeView({
   node,
   position,
+  bounds,
   scale,
   dimmed,
   selected,
@@ -571,19 +663,26 @@ function GraphNodeView({
 }: {
   node: GraphNode;
   position: { x: number; y: number };
+  bounds: Bounds | undefined;
   scale: number;
   dimmed: boolean;
   selected: boolean;
   theme: PluginSurfaceProps["theme"];
   onSelect: (id: string) => void;
-  onMove: (id: string, position: { x: number; y: number }) => void;
+  onMove: (
+    id: string,
+    position: { x: number; y: number },
+    bounds: Bounds | undefined,
+  ) => void;
 }) {
   const start = useRef({ x: 0, y: 0 });
   const moved = useRef(false);
   const positionRef = useRef(position);
   const scaleRef = useRef(scale);
+  const boundsRef = useRef(bounds);
   positionRef.current = position;
   scaleRef.current = scale;
+  boundsRef.current = bounds;
 
   const responder = useMemo(
     () =>
@@ -598,10 +697,11 @@ function GraphNodeView({
         onPanResponderMove: (_event, gesture) => {
           if (Math.abs(gesture.dx) <= 3 && Math.abs(gesture.dy) <= 3) return;
           moved.current = true;
-          onMove(node.id, {
+          const next = {
             x: start.current.x + gesture.dx / scaleRef.current,
             y: start.current.y + gesture.dy / scaleRef.current,
-          });
+          };
+          onMove(node.id, next, boundsRef.current);
         },
         onPanResponderRelease: () => {
           if (!moved.current) onSelect(node.id);
