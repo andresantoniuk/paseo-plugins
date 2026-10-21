@@ -11,10 +11,18 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
 } from "./graph";
-import { type AgentEntry, bucketOf, placement } from "./monitor";
+import {
+  type AgentEntry,
+  baseProjectName,
+  bucketOf,
+  type HostScope,
+  hostOf,
+  placement,
+} from "./monitor";
 
 type GraphViewProps = {
   entries: AgentEntry[];
+  hosts: readonly HostScope[];
   interactions: InteractionData | undefined;
   loading: boolean;
   theme: PluginSurfaceProps["theme"];
@@ -46,8 +54,16 @@ function statusColor(node: GraphNode, theme: PluginSurfaceProps["theme"]): strin
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
-export function AgentGraph({ entries, interactions, loading, theme, navigation }: GraphViewProps) {
+export function AgentGraph({
+  entries,
+  hosts,
+  interactions,
+  loading,
+  theme,
+  navigation,
+}: GraphViewProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [hostFilter, setHostFilter] = useState<string | null>(null);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const [workspaceFilter, setWorkspaceFilter] = useState<string | null>(null);
   const [providerFilter, setProviderFilter] = useState<string | null>(null);
@@ -69,19 +85,32 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     setManual({});
     setSelectedId(null);
     setSelectedEdge(null);
-  }, [projectFilter, workspaceFilter, providerFilter, showSubagents, connectedOnly]);
+  }, [hostFilter, projectFilter, workspaceFilter, providerFilter, showSubagents, connectedOnly]);
+
+  const entryHosts = useMemo(() => {
+    const byId = new Map<string, HostScope>();
+    for (const entry of entries) {
+      const scope = hostOf(entry);
+      if (scope && !byId.has(scope.serverId)) byId.set(scope.serverId, scope);
+    }
+    return [...byId.values()].sort((left, right) => left.label.localeCompare(right.label));
+  }, [entries]);
+  const hostChoices = entryHosts.length > 0 ? entryHosts : [...hosts];
 
   const projectKeys = useMemo(() => {
     const map = new Map<string, string>();
     for (const entry of entries) {
-      const name = entry.project.projectName;
+      const name = baseProjectName(entry.project.projectName);
       if (name && !map.has(name)) map.set(name, placement(entry));
     }
     return map;
   }, [entries]);
   const projects = useMemo(() => [...projectKeys.keys()].sort(), [projectKeys]);
   const workspaces = useMemo(
-    () => [...new Set(entries.map((entry) => entry.project.workspaceName?.trim()).filter(Boolean))].sort() as string[],
+    () =>
+      [
+        ...new Set(entries.map((entry) => entry.project.workspaceName?.trim()).filter(Boolean)),
+      ].sort() as string[],
     [entries],
   );
   const providers = useMemo(
@@ -92,11 +121,12 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     () =>
       entries.filter(
         (entry) =>
-          (!projectFilter || entry.project.projectName === projectFilter) &&
+          (!hostFilter || hostOf(entry)?.serverId === hostFilter) &&
+          (!projectFilter || baseProjectName(entry.project.projectName) === projectFilter) &&
           (!workspaceFilter || entry.project.workspaceName === workspaceFilter) &&
           (!providerFilter || entry.agent.provider === providerFilter),
       ),
-    [entries, projectFilter, workspaceFilter, providerFilter],
+    [entries, hostFilter, projectFilter, workspaceFilter, providerFilter],
   );
   const layout = useMemo(
     () => buildGraph(filteredEntries, interactions, { includeSubagents: showSubagents }),
@@ -118,7 +148,8 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
   }, [layout.edges]);
 
   const visibleNodes = useMemo(
-    () => (connectedOnly ? layout.nodes.filter((node) => (degree.get(node.id) ?? 0) > 0) : layout.nodes),
+    () =>
+      connectedOnly ? layout.nodes.filter((node) => (degree.get(node.id) ?? 0) > 0) : layout.nodes,
     [connectedOnly, degree, layout.nodes],
   );
   const visibleIds = useMemo(() => new Set(visibleNodes.map((node) => node.id)), [visibleNodes]);
@@ -144,7 +175,15 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
       if (list) list.push(node);
       else groups.set(node.colorKey, [node]);
     }
-    const boxes: Array<{ key: string; name: string; count: number; x: number; y: number; width: number; height: number }> = [];
+    const boxes: Array<{
+      key: string;
+      name: string;
+      count: number;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }> = [];
     for (const [key, group] of groups) {
       let left = Number.POSITIVE_INFINITY;
       let top = Number.POSITIVE_INFINITY;
@@ -204,15 +243,13 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     return edge ? { edge, from, to } : null;
   }, [selectedEdge, visibleById, visibleEdges]);
 
-  const selected = selectedId ? visibleById.get(selectedId) ?? null : null;
+  const selected = selectedId ? (visibleById.get(selectedId) ?? null) : null;
 
   useEffect(() => {
     if (selectedId && !visibleById.has(selectedId)) setSelectedId(null);
     if (
       selectedEdge &&
-      !visibleEdges.some(
-        (edge) => edge.from === selectedEdge.from && edge.to === selectedEdge.to,
-      )
+      !visibleEdges.some((edge) => edge.from === selectedEdge.from && edge.to === selectedEdge.to)
     ) {
       setSelectedEdge(null);
     }
@@ -273,6 +310,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
     setManual({});
     setScale(1);
     setPan({ x: 0, y: 0 });
+    setHostFilter(null);
     setProjectFilter(null);
     setWorkspaceFilter(null);
     setProviderFilter(null);
@@ -300,7 +338,11 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
   useEffect(() => {
     if (Platform.OS !== "web") return;
     const node = canvasRef.current as unknown as {
-      addEventListener?: (name: string, handler: (event: unknown) => void, options?: unknown) => void;
+      addEventListener?: (
+        name: string,
+        handler: (event: unknown) => void,
+        options?: unknown,
+      ) => void;
       removeEventListener?: (name: string, handler: (event: unknown) => void) => void;
     } | null;
     if (!node?.addEventListener || !node.removeEventListener) return;
@@ -332,6 +374,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
   );
 
   const activeFilterCount =
+    (hostFilter ? 1 : 0) +
     (projectFilter ? 1 : 0) +
     (workspaceFilter ? 1 : 0) +
     (providerFilter ? 1 : 0) +
@@ -402,7 +445,9 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>Reset</Text>
           </Pressable>
           {loading ? (
-            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>reading timelines…</Text>
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+              reading timelines…
+            </Text>
           ) : interactions?.unreadable ? (
             <Text style={{ color: theme.colors.statusWarning, fontSize: 10 }}>
               {interactions.unreadable} timelines unreadable
@@ -411,6 +456,31 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
         </View>
         {filtersOpen ? (
           <>
+            {hostChoices.length > 1 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 6, paddingHorizontal: 14 }}
+              >
+                <Chip
+                  label="All hosts"
+                  active={hostFilter === null}
+                  theme={theme}
+                  onPress={() => setHostFilter(null)}
+                />
+                {hostChoices.map((host) => (
+                  <Chip
+                    key={host.serverId}
+                    label={host.label}
+                    active={hostFilter === host.serverId}
+                    theme={theme}
+                    onPress={() =>
+                      setHostFilter(hostFilter === host.serverId ? null : host.serverId)
+                    }
+                  />
+                ))}
+              </ScrollView>
+            ) : null}
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -614,13 +684,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                     height: edgeSelected ? thickness + 2 : thickness,
                     borderRadius: thickness / 2,
                     backgroundColor: color,
-                    opacity: active
-                      ? edgeSelected
-                        ? 1
-                        : edge.kind === "tree"
-                          ? 0.7
-                          : 0.85
-                      : 0.06,
+                    opacity: active ? (edgeSelected ? 1 : edge.kind === "tree" ? 0.7 : 0.85) : 0.06,
                   }}
                 />
               </Pressable>
@@ -747,6 +811,11 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
             <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
               {selected.repo}
             </Text>
+            {selected.host ? (
+              <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
+                {selected.host.label}
+              </Text>
+            ) : null}
             <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
               {selected.meta} · {selected.messageCount} messages
               {selected.childCount > 0 ? ` · ${selected.childCount} children` : ""}
@@ -755,7 +824,12 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Open agent ${selected.title}`}
-                onPress={() => navigation?.openAgent({ agentId: selected.agentId ?? "" })}
+                onPress={() =>
+                  navigation?.openAgent({
+                    agentId: selected.agentId ?? "",
+                    ...(selected.host ? { serverId: selected.host.serverId } : null),
+                  })
+                }
                 style={{
                   alignSelf: "flex-start",
                   marginTop: 4,
@@ -765,7 +839,9 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                   backgroundColor: theme.colors.accent,
                 }}
               >
-                <Text style={{ color: theme.colors.accentForeground, fontSize: 11, fontWeight: "600" }}>
+                <Text
+                  style={{ color: theme.colors.accentForeground, fontSize: 11, fontWeight: "600" }}
+                >
                   Open agent
                 </Text>
               </Pressable>
@@ -817,10 +893,7 @@ export function AgentGraph({ entries, interactions, loading, theme, navigation }
                 <Icon name="X" size={14} color={theme.colors.foregroundMuted} />
               </Pressable>
             </View>
-            <Text
-              numberOfLines={2}
-              style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}
-            >
+            <Text numberOfLines={2} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
               {selectedEdgeNodes.from.title} ↔ {selectedEdgeNodes.to.title}
             </Text>
           </View>
@@ -861,7 +934,9 @@ function Chip({
         backgroundColor: active ? theme.colors.accent : theme.colors.surface1,
       }}
     >
-      {color ? <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color }} /> : null}
+      {color ? (
+        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color }} />
+      ) : null}
       <Text
         numberOfLines={1}
         style={{

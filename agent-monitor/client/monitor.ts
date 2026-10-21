@@ -4,6 +4,28 @@ import type { AgentSort, MonitorSettings } from "../shared/monitor-settings";
 export type PaseoApi = ReturnType<typeof usePaseo>;
 export type PaseoWorkspace = Awaited<ReturnType<PaseoApi["workspaces"]["list"]>>["entries"][number];
 export type AgentEntry = Awaited<ReturnType<PaseoApi["agents"]["list"]>>["entries"][number];
+
+/**
+ * The host an entry was listed from. Agent ids are daemon-scoped UUIDs, so the
+ * scope travels alongside the entry instead of inside it: entries stay
+ * structurally compatible with every function that takes an `AgentEntry`.
+ */
+export type HostScope = {
+  readonly serverId: string;
+  readonly label: string;
+};
+
+export type ScopedAgentEntry = AgentEntry & { readonly hostScope?: HostScope };
+
+/** The host scope tagged onto an entry, if it was listed from a known host. */
+export function hostOf(entry: AgentEntry): HostScope | undefined {
+  return (entry as ScopedAgentEntry).hostScope;
+}
+
+/** Tag an entry with the host it was listed from. */
+export function withHostScope(entry: AgentEntry, host: HostScope): ScopedAgentEntry {
+  return { ...entry, hostScope: host };
+}
 type AgentSnapshot = AgentEntry["agent"];
 export type WorkspaceSummary = {
   id: string;
@@ -159,6 +181,19 @@ export function age(since: number, now: number): string {
   return `${Math.round(hours / 24)}d`;
 }
 
+/**
+ * The graph panel key: like `placement` but on the base project name, so one
+ * project renders as one panel however many hosts list it.
+ */
+export function panelKey(entry: AgentEntry): string {
+  const base = baseProjectName(entry.project.projectName);
+  const workspace = entry.project.workspaceName?.trim();
+  const scope =
+    workspace && workspace !== entry.project.projectName ? `${base} / ${workspace}` : base;
+  const branch = entry.project.checkout.isGit ? entry.project.checkout.currentBranch : null;
+  return branch ? `${scope} · ${branch}` : scope;
+}
+
 export function placement(entry: AgentEntry): string {
   const { project } = entry;
   const workspace = project.workspaceName?.trim();
@@ -178,6 +213,7 @@ export function title(entry: AgentEntry): string {
 export function matches(entry: AgentEntry, needle: string): boolean {
   if (needle.length === 0) return true;
   return [
+    hostOf(entry)?.label ?? "",
     entry.agent.title ?? "",
     entry.agent.id,
     entry.agent.provider,
@@ -399,6 +435,45 @@ export function buildRoster(
     return { kind: "workspace", groups: groupByWorkspace(entries, directory, options) };
   }
   return { kind: "project", projects: groupByProject(entries, directory, options) };
+}
+
+/**
+ * The cross-host project name: registry display names may carry a per-host
+ * suffix ("FINTERLACE · mac") because the core sidebar cannot unify non-git
+ * projects. The monitor groups by the base name so one project reads as one
+ * group however many hosts list it.
+ */
+export function baseProjectName(name: string): string {
+  const separator = name.indexOf(" · ");
+  return separator < 0 ? name : name.slice(0, separator).trim() || name;
+}
+
+export type HostedProjectGroups = {
+  host: HostScope;
+  projects: ProjectGroup[];
+};
+
+/**
+ * Merge per-host project groups by base name. Groups from different hosts that
+ * share a base name become one group; its workspaces keep their host, which
+ * the UI reads back off each workspace's entries. Single-host input comes out
+ * unchanged apart from the name normalization.
+ */
+export function mergeProjectGroupsAcrossHosts(all: readonly HostedProjectGroups[]): ProjectGroup[] {
+  const merged = new Map<string, ProjectGroup>();
+  for (const { projects } of all) {
+    for (const project of projects) {
+      const name = baseProjectName(project.name);
+      const existing = merged.get(name);
+      if (!existing) {
+        merged.set(name, { ...project, id: name, name, pinned: project.pinned });
+        continue;
+      }
+      existing.workspaces.push(...project.workspaces);
+      existing.pinned = existing.pinned || project.pinned;
+    }
+  }
+  return [...merged.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function childCounts(entries: readonly AgentEntry[]): ReadonlyMap<string, number> {

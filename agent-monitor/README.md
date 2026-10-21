@@ -85,6 +85,17 @@ The graph reads the tail of each agent's timeline (200 entries, up to 60 agents,
 derive message and subagent edges. Closed agents or unreadable timelines contribute no edges, and
 the graph never opens a separate connection of its own.
 
+## Multiple hosts
+
+When the client connects to more than one host, the monitor merges every online host into one
+screen. The header counts agents across hosts, host chips filter the roster, rows show their host
+in compact placement lines, and project groups merge by base name so one project reads as one
+group (a per-host display suffix such as `FINTERLACE · mac` does not split the group). The graph
+adds a host filter row, shows the host in node details, and opens agents and workspaces on their
+own host through the navigation `serverId`. Timeline sweeps run per host and merge, and archive
+fans out to the owning host of each agent. A host that fails to load is named in a warning while
+the rest keep working; the sidebar badge stays per host.
+
 ## Limits
 
 Interrupting a turn is not part of `PaseoApi`, so archive is the only lifecycle action here.

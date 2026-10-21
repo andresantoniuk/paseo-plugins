@@ -1,5 +1,5 @@
-import type { AgentEntry } from "./monitor";
-import { parentAgentId, placement, stateLabel, title } from "./monitor";
+import type { AgentEntry, HostScope } from "./monitor";
+import { hostOf, panelKey, parentAgentId, stateLabel, title } from "./monitor";
 
 export type GraphEdgeKind = "tree" | "message" | "subagent";
 
@@ -35,7 +35,9 @@ export type GraphNode = {
   repo: string;
   meta: string;
   status: string;
-  /** Stable color key: project + workspace. */
+  /** The host the agent was listed from; null for provider-native subagents of unknown origin. */
+  host: HostScope | null;
+  /** Stable color key: project + workspace, shared across hosts so one project reads as one panel. */
   colorKey: string;
   messageCount: number;
   childCount: number;
@@ -145,7 +147,8 @@ export function buildGraph(
       repo: repoLabel(entry),
       meta: `${entry.agent.provider}${entry.agent.model ? ` · ${entry.agent.model}` : ""} · ${stateLabel(entry.agent)}`,
       status: stateLabel(entry.agent),
-      colorKey: placement(entry),
+      host: hostOf(entry) ?? null,
+      colorKey: panelKey(entry),
       messageCount: interactions?.messagesByAgent.get(entry.agent.id) ?? 0,
       childCount: childAgents,
       parentId: parentAgentId(entry.agent),
@@ -186,6 +189,7 @@ export function buildGraph(
         repo: `${parent.repo} · subagent`,
         meta: `${subagent.kind} · ${subagent.count} calls`,
         status: "subagent",
+        host: parent.host,
         colorKey: parent.colorKey,
         messageCount: subagent.count,
         childCount: 0,
@@ -266,10 +270,7 @@ export function buildGraph(
     NODE_WIDTH + GRAPH_PADDING * 2,
     ...clusterSummaries.map((cluster) => cluster.x + cluster.width + GRAPH_PADDING),
   );
-  const height = Math.max(
-    NODE_HEIGHT + GRAPH_PADDING * 2,
-    cursorY + shelfHeight + GRAPH_PADDING,
-  );
+  const height = Math.max(NODE_HEIGHT + GRAPH_PADDING * 2, cursorY + shelfHeight + GRAPH_PADDING);
 
   const finalEdges = [...edgeMap.values()].filter(
     (edge) => byId.has(edge.from) && byId.has(edge.to),
