@@ -60,9 +60,10 @@ screenshot uses the same synthetic project and agent names.
 
 ## Sidebar row
 
-- The row's badge counts the Attention bucket, using the same rule as the roster. It shows no
-  number while the roster loads or after a refresh fails, and `N+` once the agent list reaches the
-  2,000-agent page limit.
+- The row's badge counts the Attention bucket across every online host, using the same rule
+  as the roster. It shows no number while loading, `N+` once an agent list reaches the 2,000-agent
+  page limit or a host fails to load, and the popover lists those agents however many hosts they
+  span.
 - Press the badge for a popover of those agents, longest waiting first (up to eight), each
   with its host pill, provider, and wait age. Tapping one opens the monitor in graph view with
   that agent's card selected; **Open monitor** opens the roster filtered to Attention. (The

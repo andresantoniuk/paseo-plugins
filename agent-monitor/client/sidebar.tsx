@@ -2,37 +2,38 @@ import type { PluginPopoverProps, PluginSidebarItemProps } from "@getpaseo/plugi
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { type AttentionItem, age, attentionCount, attentionItems, hostColor } from "./monitor";
-import { type MonitorData, useMonitorQuery } from "./monitor-data";
+import { type AttentionItem, age, attentionItems, hostColor } from "./monitor";
+import { useAllHostsMonitor } from "./monitor-data";
 
 export const MONITOR_SCREEN_ID = "monitor";
 const POPOVER_LIMIT = 8;
 
-function selectAttention(data: MonitorData) {
-  return { items: attentionItems(data.entries), truncated: data.truncated };
-}
-
-/** Attention state from the shared directory query; `count` is null while it cannot be trusted. */
-function useAttention(hostId: string) {
-  const { data, isError } = useMonitorQuery(hostId, selectAttention);
+/**
+ * Attention state across every online host, sharing the screen's merged query
+ * so the badge never misses an agent on another host. A host that fails to
+ * load makes the count a lower bound instead of hiding it.
+ */
+function useAttention() {
+  const monitor = useAllHostsMonitor();
+  const items = useMemo(() => attentionItems(monitor.entries), [monitor.entries]);
+  const failed = monitor.failedHosts.length > 0;
+  const loading = monitor.isPending && items.length === 0;
   return {
-    items: data?.items,
-    summary: attentionCount({
-      items: data?.items,
-      truncated: data?.truncated ?? false,
-      failed: isError,
-    }),
+    items,
+    summary:
+      loading || (failed && items.length === 0)
+        ? null
+        : { count: items.length, lowerBound: monitor.truncated || failed },
   };
 }
 
 export function MonitorSidebarItem({
-  host,
   theme,
   currentScreen,
   openScreen,
   openPopover,
 }: PluginSidebarItemProps) {
-  const { summary } = useAttention(host.id);
+  const { summary } = useAttention();
   const label =
     summary && summary.count > 0 ? `${summary.count}${summary.lowerBound ? "+" : ""}` : null;
   const styles = useMemo(
@@ -72,8 +73,8 @@ export function MonitorSidebarItem({
   );
 }
 
-function AttentionPopover({ host, theme, layout, openScreen }: PluginPopoverProps) {
-  const { items, summary } = useAttention(host.id);
+function AttentionPopover({ theme, layout, openScreen }: PluginPopoverProps) {
+  const { items, summary } = useAttention();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), 15_000);
