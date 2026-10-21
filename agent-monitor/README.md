@@ -63,8 +63,10 @@ screenshot uses the same synthetic project and agent names.
 - The row's badge counts the Attention bucket, using the same rule as the roster. It shows no
   number while the roster loads or after a refresh fails, and `N+` once the agent list reaches the
   2,000-agent page limit.
-- Press the badge for a popover of those agents, longest waiting first (up to eight), with
-  **Open monitor**, which opens the roster filtered to Attention.
+- Press the badge for a popover of those agents, longest waiting first (up to eight), each
+  with its host pill, provider, and wait age. Tapping one opens the monitor in graph view with
+  that agent's card selected; **Open monitor** opens the roster filtered to Attention. (The
+  popover has no navigation of its own, so agents still open through the monitor.)
 - The monitor screen accepts a `bucket` param (`attention`, `running`, `idle`, `closed`, or `all`)
   as its initial filter, so a link such as `…/surface/monitor?param.bucket=attention` opens
   filtered and keeps that filter on reload. Chips then filter in place without changing the URL.

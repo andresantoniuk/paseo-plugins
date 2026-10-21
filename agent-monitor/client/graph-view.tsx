@@ -24,6 +24,11 @@ import {
 type GraphViewProps = {
   entries: AgentEntry[];
   hosts: readonly HostScope[];
+  /**
+   * An agent id to select when the graph mounts (deep link from the sidebar
+   * quick access). Later selections are the user's own.
+   */
+  focusedAgentId?: string | null;
   interactions: InteractionData | undefined;
   loading: boolean;
   theme: PluginSurfaceProps["theme"];
@@ -58,11 +63,20 @@ const clamp = (value: number, min: number, max: number): number =>
 export function AgentGraph({
   entries,
   hosts,
+  focusedAgentId,
   interactions,
   loading,
   theme,
   navigation,
 }: GraphViewProps) {
+  // Deep link from the sidebar quick access: select the requested card once.
+  // Later selections belong to the user.
+  useEffect(() => {
+    if (focusedAgentId) {
+      setSelectedEdge(null);
+      setSelectedId(focusedAgentId);
+    }
+  }, [focusedAgentId]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [hostFilter, setHostFilter] = useState<string | null>(null);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);

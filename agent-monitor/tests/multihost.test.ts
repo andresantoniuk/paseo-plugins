@@ -105,6 +105,21 @@ describe("host scope", () => {
   });
 });
 
+describe("attention quick access", () => {
+  test("carries host and provider detail for the popover", async () => {
+    const { attentionItems } = await import("../client/monitor");
+    const items = attentionItems([
+      withHostScope(
+        entry({ id: "a", requiresAttention: true, provider: "claude", model: "opus" }),
+        ANTODESK,
+      ),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0].host?.label).toBe("antodesk");
+    expect(items[0].detail).toBe("claude · opus");
+  });
+});
+
 describe("hostColor", () => {
   test("is stable per server and comes from the shared palette", () => {
     expect(hostColor(ANTODESK)).toBe(hostColor(ANTODESK));

@@ -1,7 +1,7 @@
 import { getPaseoClient, type PluginSurfaceProps, useSettings } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMutation } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Pressable, Text, TextInput, View } from "react-native";
 import { initialBucket, type MonitorSettings, monitorSettings } from "../shared/monitor-settings";
 import { DiffStat, type DiffStatStyles } from "./diff-stat";
@@ -47,6 +47,11 @@ type AgentMonitorProps = PluginSurfaceProps & {
    * press and drop the search text. Omitted on hosts without screens.
    */
   bucketParam?: string;
+  /**
+   * An agent id to focus when the screen opens (e.g. from the sidebar quick
+   * access). The monitor switches to the graph with that card selected, once.
+   */
+  agentParam?: string;
 };
 
 export function AgentMonitor(props: AgentMonitorProps) {
@@ -147,6 +152,7 @@ function AgentMonitorRoster({
   navigation,
   onOpenSettings,
   bucketParam,
+  agentParam,
   settings,
 }: AgentMonitorProps & { settings: MonitorSettings }) {
   const monitor = useAllHostsMonitor();
@@ -200,6 +206,19 @@ function AgentMonitorRoster({
     [allEntries, hostSelected],
   );
   const multiHost = hosts.length > 1;
+
+  // Deep link from the sidebar quick access: once the entries arrive, show
+  // everything and focus the requested agent's card in the graph.
+  const focusApplied = useRef(false);
+  useEffect(() => {
+    if (focusApplied.current || !agentParam) return;
+    if (allEntries.some((entry) => entry.agent.id === agentParam)) {
+      focusApplied.current = true;
+      setHostSelected(null);
+      setSelected(null);
+      setView("graph");
+    }
+  }, [agentParam, allEntries]);
   const counts = useMemo(() => {
     const totals: Record<Bucket, number> = { attention: 0, running: 0, idle: 0, closed: 0 };
     for (const entry of entries) totals[bucketOf(entry.agent)] += 1;
@@ -878,6 +897,7 @@ function AgentMonitorRoster({
         <AgentGraph
           entries={visibleEntries}
           hosts={hosts}
+          focusedAgentId={agentParam ?? null}
           interactions={interactions.data}
           loading={interactions.isPending}
           theme={theme}

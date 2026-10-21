@@ -148,8 +148,19 @@ export function parseBucketParam(value: string | undefined): Bucket | null | und
   return BUCKETS.find((bucket) => bucket === value);
 }
 
-/** The lean row the sidebar popover needs. Its fields change only when the row visibly changes. */
-export type AttentionItem = { id: string; title: string; state: string; since: number };
+/**
+ * The lean row the sidebar popover needs. Its fields change only when the row
+ * visibly changes. `detail` names the provider and model; `host` scopes the
+ * row to its daemon for the pill and for deep-linking into the monitor.
+ */
+export type AttentionItem = {
+  id: string;
+  title: string;
+  state: string;
+  since: number;
+  detail: string;
+  host: HostScope | null;
+};
 
 /** Agents in the attention bucket, longest-waiting first. Uses the same `bucketOf` as the screen. */
 export function attentionItems(entries: readonly AgentEntry[]): AttentionItem[] {
@@ -160,6 +171,10 @@ export function attentionItems(entries: readonly AgentEntry[]): AttentionItem[] 
       title: title(entry),
       state: stateLabel(entry.agent),
       since: waitingSince(entry.agent),
+      detail: entry.agent.model
+        ? `${entry.agent.provider} · ${entry.agent.model}`
+        : entry.agent.provider,
+      host: hostOf(entry) ?? null,
     }))
     .sort((left, right) => left.since - right.since);
 }

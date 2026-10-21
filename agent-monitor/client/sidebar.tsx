@@ -2,7 +2,7 @@ import type { PluginPopoverProps, PluginSidebarItemProps } from "@getpaseo/plugi
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { type AttentionItem, age, attentionCount, attentionItems } from "./monitor";
+import { type AttentionItem, age, attentionCount, attentionItems, hostColor } from "./monitor";
 import { type MonitorData, useMonitorQuery } from "./monitor-data";
 
 export const MONITOR_SCREEN_ID = "monitor";
@@ -84,7 +84,14 @@ function AttentionPopover({ host, theme, layout, openScreen }: PluginPopoverProp
       root: { gap: layout.compact ? 10 : 6 },
       heading: { color: theme.colors.foreground, fontSize: 13, fontWeight: "600" as const },
       detail: { color: theme.colors.foregroundMuted, fontSize: 12 },
-      row: { flexDirection: "row" as const, alignItems: "center" as const, gap: 8 },
+      rowPress: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: 8,
+        paddingVertical: 4,
+      },
+      rowBody: { flex: 1, gap: 1 },
+      rowTitleLine: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 },
       rowTitle: { flex: 1, color: theme.colors.foreground, fontSize: 13 },
       rowState: { color: theme.colors.foregroundMuted, fontSize: 12 },
       action: {
@@ -116,14 +123,54 @@ function AttentionPopover({ host, theme, layout, openScreen }: PluginPopoverProp
     <View style={styles.root}>
       <Text style={styles.heading}>{heading}</Text>
       {shown.map((item) => (
-        <View key={item.id} style={styles.row}>
-          <Text style={styles.rowTitle} numberOfLines={1} ellipsizeMode="tail">
-            {item.title}
-          </Text>
-          <Text style={styles.rowState}>
-            {item.state} · {age(item.since, now)}
-          </Text>
-        </View>
+        <Pressable
+          key={item.id}
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${item.title} in the monitor`}
+          onPress={() =>
+            openScreen({
+              screenId: MONITOR_SCREEN_ID,
+              params: { bucket: "attention", agent: item.id },
+            })
+          }
+          style={styles.rowPress}
+        >
+          <View
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: 4,
+              backgroundColor: theme.colors.statusWarning,
+            }}
+          />
+          <View style={styles.rowBody}>
+            <View style={styles.rowTitleLine}>
+              <Text style={styles.rowTitle} numberOfLines={1} ellipsizeMode="tail">
+                {item.title}
+              </Text>
+              {item.host ? (
+                <View
+                  accessibilityLabel={`Host ${item.host.label}`}
+                  style={{
+                    paddingHorizontal: 6,
+                    paddingVertical: 1,
+                    borderRadius: 7,
+                    borderWidth: 1,
+                    borderColor: `${hostColor(item.host)}66`,
+                    backgroundColor: `${hostColor(item.host)}26`,
+                  }}
+                >
+                  <Text style={{ color: hostColor(item.host), fontSize: 9, fontWeight: "700" }}>
+                    {item.host.label}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={styles.rowState} numberOfLines={1} ellipsizeMode="tail">
+              {item.state} · {age(item.since, now)} · {item.detail}
+            </Text>
+          </View>
+        </Pressable>
       ))}
       {hidden > 0 ? <Text style={styles.detail}>and {hidden} more</Text> : null}
       <Pressable

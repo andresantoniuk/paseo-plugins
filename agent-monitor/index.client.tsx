@@ -19,6 +19,7 @@ export default function contribute(client: PluginClientContext) {
       <AgentMonitor
         {...props}
         bucketParam={props.params.bucket}
+        agentParam={props.params.agent}
         onOpenSettings={() => client.openSettings("monitor")}
       />
     ),
