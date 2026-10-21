@@ -167,8 +167,8 @@ export function AgentGraph({
     [manual],
   );
 
-  // The halo follows the cards, so dragging a node never leaves its group
-  // visually behind. It grows and shrinks with the members.
+  // Lanes stay fixed at their layout positions: a dragged card floats above
+  // them instead of pulling its lane along, so lanes never overlap each other.
   const clusterBoxes = useMemo(() => {
     const groups = new Map<string, GraphNode[]>();
     for (const node of visibleNodes) {
@@ -194,11 +194,10 @@ export function AgentGraph({
       const hosts = new Set<string>();
       for (const node of group) {
         if (node.host) hosts.add(node.host.label);
-        const position = positionOf(node);
-        left = Math.min(left, position.x);
-        top = Math.max(top, position.y);
-        right = Math.max(right, position.x + NODE_WIDTH);
-        bottom = Math.max(bottom, position.y + NODE_HEIGHT);
+        left = Math.min(left, node.x);
+        top = Math.max(top, node.y);
+        right = Math.max(right, node.x + NODE_WIDTH);
+        bottom = Math.max(bottom, node.y + NODE_HEIGHT);
       }
       if (!Number.isFinite(left)) continue;
       const pad = 20;
@@ -215,7 +214,7 @@ export function AgentGraph({
       });
     }
     return boxes.sort((left, right) => left.name.localeCompare(right.name));
-  }, [positionOf, visibleNodes]);
+  }, [visibleNodes]);
 
   const focusIds = useMemo(() => {
     if (selectedEdge) return new Set([selectedEdge.from, selectedEdge.to]);
@@ -756,6 +755,7 @@ export function AgentGraph({
             const edgeEndpoint =
               selectedEdge !== null &&
               (selectedEdge.from === node.id || selectedEdge.to === node.id);
+            const lifted = manual[node.id] !== undefined || selectedId === node.id;
             return (
               <GraphNodeView
                 key={node.id}
@@ -763,6 +763,7 @@ export function AgentGraph({
                 position={position}
                 scale={scale}
                 dimmed={dimmed}
+                lifted={lifted}
                 selected={selectedId === node.id || edgeEndpoint}
                 theme={theme}
                 onSelect={selectNode}
@@ -990,6 +991,7 @@ function GraphNodeView({
   position,
   scale,
   dimmed,
+  lifted,
   selected,
   theme,
   onSelect,
@@ -999,6 +1001,7 @@ function GraphNodeView({
   position: { x: number; y: number };
   scale: number;
   dimmed: boolean;
+  lifted: boolean;
   selected: boolean;
   theme: PluginSurfaceProps["theme"];
   onSelect: (id: string) => void;
@@ -1053,6 +1056,7 @@ function GraphNodeView({
         left: position.x,
         top: position.y,
         width: NODE_WIDTH,
+        zIndex: lifted ? 10 : 1,
         minHeight: NODE_HEIGHT,
         padding: 9,
         borderRadius: 10,
