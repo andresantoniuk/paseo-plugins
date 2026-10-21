@@ -52,8 +52,8 @@ screenshot uses the same synthetic project and agent names.
   project/workspace panels; provider-native subagents appear as dashed nodes. Edges encode parent
   hand-offs, timeline message provenance, and subagent dispatches, with thickness scaled by message
   count. Drag cards, pan the canvas, zoom with the wheel or a trackpad pinch, filter by project,
-  workspace, provider, subagents, or connected-only, and select a card or edge to focus its
-  neighbourhood and dim the rest.
+  workspace, provider, subagents, or connected-only. Tapping a card opens that agent straight away;
+  tapping an edge focuses its neighbourhood and dims the rest.
 - Select an agent row to open that agent, or select a workspace header (or its folder button when
   collapsed) to open its workspace through Paseo's cross-platform navigation API.
 - Archive one agent, or sweep every closed agent (two taps).

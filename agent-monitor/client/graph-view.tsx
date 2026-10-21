@@ -261,9 +261,10 @@ export function AgentGraph({
     return edge ? { edge, from, to } : null;
   }, [selectedEdge, visibleById, visibleEdges]);
 
-  const selected = selectedId ? (visibleById.get(selectedId) ?? null) : null;
-
   useEffect(() => {
+    // Only clear once the layout has nodes: on first mount the entries may
+    // still be loading, and a deep link would lose its selection otherwise.
+    if (visibleById.size === 0) return;
     if (selectedId && !visibleById.has(selectedId)) setSelectedId(null);
     if (
       selectedEdge &&
@@ -282,10 +283,19 @@ export function AgentGraph({
     setSelectedEdge(null);
   }, []);
 
-  const selectNode = useCallback((id: string) => {
-    setSelectedEdge(null);
-    setSelectedId((current) => (current === id ? null : id));
-  }, []);
+  // Tapping a card opens its agent straight away; there is no intermediate
+  // details panel. Dragging still moves the card (the responder distinguishes).
+  const openNode = useCallback(
+    (id: string) => {
+      const node = visibleById.get(id);
+      if (!node?.agentId) return;
+      navigation?.openAgent({
+        agentId: node.agentId,
+        ...(node.host ? { serverId: node.host.serverId } : null),
+      });
+    },
+    [navigation, visibleById],
+  );
 
   const selectEdge = useCallback((from: string, to: string) => {
     setSelectedId(null);
@@ -783,95 +793,12 @@ export function AgentGraph({
                 lifted={lifted}
                 selected={selectedId === node.id || edgeEndpoint}
                 theme={theme}
-                onSelect={selectNode}
+                onOpen={openNode}
                 onMove={moveNode}
               />
             );
           })}
         </View>
-
-        {selected ? (
-          <View
-            style={{
-              position: "absolute",
-              left: 16,
-              right: 16,
-              bottom: 16,
-              backgroundColor: theme.colors.surface1,
-              borderWidth: 1,
-              borderColor: theme.colors.border + "88",
-              borderRadius: 10,
-              padding: 12,
-              gap: 3,
-            }}
-          >
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <View
-                style={{
-                  width: 9,
-                  height: 9,
-                  borderRadius: 5,
-                  backgroundColor: statusColor(selected, theme),
-                }}
-              />
-              <Text
-                numberOfLines={1}
-                style={{ flex: 1, color: theme.colors.foreground, fontSize: 13, fontWeight: "700" }}
-              >
-                {selected.title}
-              </Text>
-              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-                {selected.kind}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Close graph details"
-                onPress={() => setSelectedId(null)}
-                style={{ padding: 4 }}
-              >
-                <Icon name="X" size={14} color={theme.colors.foregroundMuted} />
-              </Pressable>
-            </View>
-            <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
-              {selected.repo}
-            </Text>
-            {selected.host ? (
-              <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
-                {selected.host.label}
-              </Text>
-            ) : null}
-            <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
-              {selected.meta} · {selected.messageCount} messages
-              {selected.childCount > 0 ? ` · ${selected.childCount} children` : ""}
-            </Text>
-            {selected.agentId ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`Open agent ${selected.title}`}
-                onPress={() =>
-                  navigation?.openAgent({
-                    agentId: selected.agentId ?? "",
-                    ...(selected.host ? { serverId: selected.host.serverId } : null),
-                  })
-                }
-                style={{
-                  alignSelf: "flex-start",
-                  marginTop: 4,
-                  paddingHorizontal: 10,
-                  paddingVertical: 5,
-                  borderRadius: 6,
-                  backgroundColor: theme.colors.accent,
-                }}
-              >
-                <Text
-                  style={{ color: theme.colors.accentForeground, fontSize: 11, fontWeight: "600" }}
-                >
-                  Open agent
-                </Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ) : null}
 
         {selectedEdgeNodes ? (
           <View
@@ -1011,7 +938,7 @@ function GraphNodeView({
   lifted,
   selected,
   theme,
-  onSelect,
+  onOpen,
   onMove,
 }: {
   node: GraphNode;
@@ -1021,7 +948,7 @@ function GraphNodeView({
   lifted: boolean;
   selected: boolean;
   theme: PluginSurfaceProps["theme"];
-  onSelect: (id: string) => void;
+  onOpen: (id: string) => void;
   onMove: (id: string, position: { x: number; y: number }) => void;
 }) {
   const start = useRef({ x: 0, y: 0 });
@@ -1051,10 +978,10 @@ function GraphNodeView({
           onMove(node.id, next);
         },
         onPanResponderRelease: () => {
-          if (!moved.current) onSelect(node.id);
+          if (!moved.current) onOpen(node.id);
         },
       }),
-    [node.id, onMove, onSelect],
+    [node.id, onOpen, onMove],
   );
 
   const border = selected
@@ -1067,7 +994,7 @@ function GraphNodeView({
     <View
       {...responder.panHandlers}
       accessibilityRole="button"
-      accessibilityLabel={`Select ${node.title}`}
+      accessibilityLabel={`Open agent ${node.title}`}
       style={{
         position: "absolute",
         left: position.x,

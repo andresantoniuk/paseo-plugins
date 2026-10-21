@@ -897,7 +897,11 @@ function AgentMonitorRoster({
         <AgentGraph
           entries={visibleEntries}
           hosts={hosts}
-          focusedAgentId={agentParam ?? null}
+          focusedAgentId={
+            agentParam && visibleEntries.some((entry) => entry.agent.id === agentParam)
+              ? agentParam
+              : null
+          }
           interactions={interactions.data}
           loading={interactions.isPending}
           theme={theme}
