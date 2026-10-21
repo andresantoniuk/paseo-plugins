@@ -2,6 +2,7 @@ import type { PluginPopoverProps, PluginSidebarItemProps } from "@getpaseo/plugi
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
+import { requestAgentFocus } from "./focus-request";
 import { type AttentionItem, age, attentionItems, hostColor } from "./monitor";
 import { useAllHostsMonitor } from "./monitor-data";
 
@@ -128,12 +129,13 @@ function AttentionPopover({ theme, layout, openScreen }: PluginPopoverProps) {
           key={item.id}
           accessibilityRole="button"
           accessibilityLabel={`Open ${item.title} in the monitor`}
-          onPress={() =>
+          onPress={() => {
+            requestAgentFocus(item.id);
             openScreen({
               screenId: MONITOR_SCREEN_ID,
               params: { bucket: "attention", agent: item.id },
-            })
-          }
+            });
+          }}
           style={styles.rowPress}
         >
           <View

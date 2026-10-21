@@ -1,10 +1,11 @@
 import { getPaseoClient, type PluginSurfaceProps, useSettings } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMutation } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, Text, TextInput, View } from "react-native";
 import { initialBucket, type MonitorSettings, monitorSettings } from "../shared/monitor-settings";
 import { DiffStat, type DiffStatStyles } from "./diff-stat";
+import { peekAgentFocus, takeAgentFocus } from "./focus-request";
 import { useAllHostsInteractionGraph } from "./graph-data";
 import { AgentGraph } from "./graph-view";
 import {
@@ -208,17 +209,22 @@ function AgentMonitorRoster({
   const multiHost = hosts.length > 1;
 
   // Deep link from the sidebar quick access: once the entries arrive, show
-  // everything and focus the requested agent's card in the graph.
-  const focusApplied = useRef(false);
+  // everything and focus the requested agent's card in the graph. The request
+  // lives in module state as well as in params, because reopening the same
+  // screen does not always deliver fresh params.
+  const [deepFocusId, setDeepFocusId] = useState<string | null>(null);
   useEffect(() => {
-    if (focusApplied.current || !agentParam) return;
-    if (allEntries.some((entry) => entry.agent.id === agentParam)) {
-      focusApplied.current = true;
+    if (deepFocusId) return;
+    const wanted = peekAgentFocus() ?? agentParam;
+    if (!wanted) return;
+    if (allEntries.some((entry) => entry.agent.id === wanted)) {
+      takeAgentFocus();
+      setDeepFocusId(wanted);
       setHostSelected(null);
       setSelected(null);
       setView("graph");
     }
-  }, [agentParam, allEntries]);
+  }, [agentParam, allEntries, deepFocusId]);
   const counts = useMemo(() => {
     const totals: Record<Bucket, number> = { attention: 0, running: 0, idle: 0, closed: 0 };
     for (const entry of entries) totals[bucketOf(entry.agent)] += 1;
@@ -898,8 +904,8 @@ function AgentMonitorRoster({
           entries={visibleEntries}
           hosts={hosts}
           focusedAgentId={
-            agentParam && visibleEntries.some((entry) => entry.agent.id === agentParam)
-              ? agentParam
+            deepFocusId && visibleEntries.some((entry) => entry.agent.id === deepFocusId)
+              ? deepFocusId
               : null
           }
           interactions={interactions.data}

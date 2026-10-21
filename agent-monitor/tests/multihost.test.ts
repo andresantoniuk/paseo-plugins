@@ -120,6 +120,63 @@ describe("attention quick access", () => {
   });
 });
 
+describe("lane layout", () => {
+  test("cluster panels never overlap, however many hosts share a project", () => {
+    const projects = ["FINTERLACE", "fluxcow", "FLUXRIG", "infra", "intel", "knowledge", "QUINCE"];
+    const scoped = projects.flatMap((project) =>
+      [MAC, ANTODESK].map((host, hostIndex) =>
+        withHostScope(
+          entry(
+            { id: `${project}-${hostIndex}`, workspaceId: `ws-${project}-${hostIndex}` },
+            { projectKey: project.toLowerCase(), projectName: project, workspaceName: "general" },
+          ),
+          host,
+        ),
+      ),
+    );
+    // A couple of crowded panels, like production.
+    for (let i = 0; i < 6; i += 1) {
+      scoped.push(
+        withHostScope(
+          entry(
+            { id: `fluxrig-extra-${i}`, workspaceId: `ws-fluxrig-extra-${i}` },
+            { projectKey: "fluxrig", projectName: "FLUXRIG", workspaceName: "general" },
+          ),
+          ANTODESK,
+        ),
+      );
+    }
+    const layout = buildGraph(scoped, {
+      messagesByAgent: new Map(),
+      edges: [],
+      subagents: [],
+    });
+    for (const [aIndex, a] of layout.clusters.entries()) {
+      for (const b of layout.clusters.slice(aIndex + 1)) {
+        const separated =
+          a.x + a.width <= b.x ||
+          b.x + b.width <= a.x ||
+          a.y + a.height <= b.y ||
+          b.y + b.height <= a.y;
+        expect(separated, `${a.key} overlaps ${b.key}`).toBe(true);
+      }
+    }
+  });
+});
+
+describe("focus request", () => {
+  test("peek keeps the request, take consumes it", async () => {
+    const { peekAgentFocus, requestAgentFocus, takeAgentFocus } = await import(
+      "../client/focus-request"
+    );
+    requestAgentFocus("agent-1");
+    expect(peekAgentFocus()).toBe("agent-1");
+    expect(peekAgentFocus()).toBe("agent-1");
+    expect(takeAgentFocus()).toBe("agent-1");
+    expect(peekAgentFocus()).toBeNull();
+  });
+});
+
 describe("hostColor", () => {
   test("is stable per server and comes from the shared palette", () => {
     expect(hostColor(ANTODESK)).toBe(hostColor(ANTODESK));
