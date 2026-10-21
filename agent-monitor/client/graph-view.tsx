@@ -630,10 +630,13 @@ export function AgentGraph({
                 }}
               >
                 <Text
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
                   style={{
                     position: "absolute",
                     left: 12,
                     top: 8,
+                    maxWidth: cluster.width - 24,
                     color,
                     fontSize: 11,
                     fontWeight: "700",
