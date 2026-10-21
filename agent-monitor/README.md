@@ -94,7 +94,9 @@ group (a per-host display suffix such as `FINTERLACE · mac` does not split the 
 adds a host filter row, shows the host in node details, and opens agents and workspaces on their
 own host through the navigation `serverId`. Timeline sweeps run per host and merge, and archive
 fans out to the owning host of each agent. A host that fails to load is named in a warning while
-the rest keep working; the sidebar badge stays per host.
+the rest keep working; the sidebar badge stays per host. Every agent card carries a host pill in
+the host's color, panels spanning hosts list them, and workspace and project headers name their
+hosts, so each agent's host is visible at a glance.
 
 ## Limits
 

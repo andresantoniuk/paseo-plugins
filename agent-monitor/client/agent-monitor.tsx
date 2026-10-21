@@ -19,6 +19,7 @@ import {
   type GroupOptions,
   groupByProject,
   type HostScope,
+  hostColor,
   hostOf,
   matches,
   mergeProjectGroupsAcrossHosts,
@@ -518,11 +519,11 @@ function AgentMonitorRoster({
         </View>
       );
     },
-    [archive, childrenByParent, navigation, now, settings, styles, sweepArmed, theme],
+    [archive, childrenByParent, multiHost, navigation, now, settings, styles, sweepArmed, theme],
   );
 
   const renderWorkspaceHeader = useCallback(
-    (workspace: WorkspaceSummary, serverId?: string) => {
+    (workspace: WorkspaceSummary, host?: HostScope) => {
       const navigationId = workspace.navigationId;
       const content = (
         <>
@@ -535,6 +536,23 @@ function AgentMonitorRoster({
             <Text style={styles.workspaceTitle} numberOfLines={1} ellipsizeMode="tail">
               {workspace.name}
             </Text>
+            {host ? (
+              <View
+                accessibilityLabel={`Host ${host.label}`}
+                style={{
+                  paddingHorizontal: 6,
+                  paddingVertical: 1,
+                  borderRadius: 7,
+                  borderWidth: 1,
+                  borderColor: `${hostColor(host)}66`,
+                  backgroundColor: `${hostColor(host)}26`,
+                }}
+              >
+                <Text style={{ color: hostColor(host), fontSize: 9, fontWeight: "700" }}>
+                  {host.label}
+                </Text>
+              </View>
+            ) : null}
             {settings.showDiffStats ? (
               <DiffStat
                 additions={workspace.additions}
@@ -558,7 +576,7 @@ function AgentMonitorRoster({
           onPress={() =>
             navigation.openWorkspace({
               workspaceId: navigationId,
-              ...(serverId ? { serverId } : null),
+              ...(host ? { serverId: host.serverId } : null),
             })
           }
           style={({ pressed }) => [styles.workspaceHeader, pressed && styles.navigationPressed]}
@@ -577,10 +595,10 @@ function AgentMonitorRoster({
       const collapse = project
         ? shouldCollapseWorkspace(project, group.workspace, settings.collapseMatchingWorkspace)
         : false;
-      const serverId = group.entries.length > 0 ? hostOf(group.entries[0])?.serverId : undefined;
+      const scope = multiHost && group.entries.length > 0 ? hostOf(group.entries[0]) : undefined;
       return (
         <View key={group.workspace.id}>
-          {collapse ? null : renderWorkspaceHeader(group.workspace, serverId)}
+          {collapse ? null : renderWorkspaceHeader(group.workspace, scope)}
           {group.entries.map((entry) => (
             <View
               key={entry.agent.id}
@@ -592,12 +610,29 @@ function AgentMonitorRoster({
         </View>
       );
     },
-    [renderRow, renderWorkspaceHeader, settings.collapseMatchingWorkspace, styles.childRow],
+    [
+      renderRow,
+      renderWorkspaceHeader,
+      multiHost,
+      settings.collapseMatchingWorkspace,
+      styles.childRow,
+    ],
   );
 
   const renderProject = useCallback(
     ({ item: project }: { item: ProjectGroup }) => {
       const collapsed = collapsedProjects.has(project.id);
+      const hostLabels = multiHost
+        ? [
+            ...new Set(
+              project.workspaces.flatMap((group) =>
+                group.entries.map((entry) => hostOf(entry)?.label),
+              ),
+            ),
+          ]
+            .filter((label): label is string => Boolean(label))
+            .sort()
+        : [];
       const collapsedGroup =
         project.workspaces.length === 1 &&
         shouldCollapseWorkspace(
@@ -609,9 +644,9 @@ function AgentMonitorRoster({
           : null;
       const collapsedWorkspace = collapsedGroup?.workspace ?? null;
       const collapsedWorkspaceId = collapsedWorkspace?.navigationId;
-      const collapsedServerId =
+      const collapsedScope =
         collapsedGroup && collapsedGroup.entries.length > 0
-          ? hostOf(collapsedGroup.entries[0])?.serverId
+          ? hostOf(collapsedGroup.entries[0])
           : undefined;
       return (
         <View>
@@ -661,6 +696,11 @@ function AgentMonitorRoster({
                   {collapsedWorkspace.labels.slice(0, 2).join(" · ")}
                 </Text>
               ) : null}
+              {hostLabels.length > 0 ? (
+                <Text style={styles.headerMeta} numberOfLines={1} ellipsizeMode="tail">
+                  {hostLabels.join(", ")}
+                </Text>
+              ) : null}
             </Pressable>
             {navigation && collapsedWorkspaceId ? (
               <Pressable
@@ -670,7 +710,7 @@ function AgentMonitorRoster({
                 onPress={() =>
                   navigation.openWorkspace({
                     workspaceId: collapsedWorkspaceId,
-                    ...(collapsedServerId ? { serverId: collapsedServerId } : null),
+                    ...(collapsedScope ? { serverId: collapsedScope.serverId } : null),
                   })
                 }
                 style={({ pressed }) => [
@@ -689,7 +729,7 @@ function AgentMonitorRoster({
         </View>
       );
     },
-    [collapsedProjects, navigation, renderWorkspaceGroup, settings, styles, theme],
+    [collapsedProjects, multiHost, navigation, renderWorkspaceGroup, settings, styles, theme],
   );
 
   const separator = useCallback(() => <View style={styles.separator} />, [styles]);

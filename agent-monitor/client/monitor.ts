@@ -26,6 +26,28 @@ export function hostOf(entry: AgentEntry): HostScope | undefined {
 export function withHostScope(entry: AgentEntry, host: HostScope): ScopedAgentEntry {
   return { ...entry, hostScope: host };
 }
+
+/**
+ * Stable per-host accent colors, shared by every surface that tags a host, so
+ * a host reads as the same color in the roster, the graph, and the filters.
+ */
+export const HOST_PALETTE = [
+  "#7c9cff",
+  "#34d399",
+  "#fbbf24",
+  "#f87171",
+  "#c084fc",
+  "#22d3ee",
+  "#f472b6",
+] as const;
+
+export function hostColor(scope: HostScope): string {
+  let hash = 0;
+  for (let index = 0; index < scope.serverId.length; index += 1) {
+    hash = (hash * 31 + scope.serverId.charCodeAt(index)) | 0;
+  }
+  return HOST_PALETTE[Math.abs(hash) % HOST_PALETTE.length];
+}
 type AgentSnapshot = AgentEntry["agent"];
 export type WorkspaceSummary = {
   id: string;

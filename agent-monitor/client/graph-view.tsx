@@ -16,6 +16,7 @@ import {
   baseProjectName,
   bucketOf,
   type HostScope,
+  hostColor,
   hostOf,
   placement,
 } from "./monitor";
@@ -179,6 +180,7 @@ export function AgentGraph({
       key: string;
       name: string;
       count: number;
+      hosts: string[];
       x: number;
       y: number;
       width: number;
@@ -189,10 +191,12 @@ export function AgentGraph({
       let top = Number.POSITIVE_INFINITY;
       let right = Number.NEGATIVE_INFINITY;
       let bottom = Number.NEGATIVE_INFINITY;
+      const hosts = new Set<string>();
       for (const node of group) {
+        if (node.host) hosts.add(node.host.label);
         const position = positionOf(node);
         left = Math.min(left, position.x);
-        top = Math.min(top, position.y);
+        top = Math.max(top, position.y);
         right = Math.max(right, position.x + NODE_WIDTH);
         bottom = Math.max(bottom, position.y + NODE_HEIGHT);
       }
@@ -203,6 +207,7 @@ export function AgentGraph({
         key,
         name: key.split(" · ")[0] || key,
         count: group.length,
+        hosts: [...hosts].sort(),
         x: left - pad,
         y: top - header - pad,
         width: right - left + pad * 2,
@@ -622,6 +627,7 @@ export function AgentGraph({
                   }}
                 >
                   {cluster.name} · {cluster.count}
+                  {cluster.hosts.length > 1 ? ` · ${cluster.hosts.join(", ")}` : ""}
                 </Text>
               </View>
             );
@@ -1074,6 +1080,23 @@ function GraphNodeView({
         >
           {node.title}
         </Text>
+        {node.host ? (
+          <View
+            accessibilityLabel={`Host ${node.host.label}`}
+            style={{
+              paddingHorizontal: 6,
+              paddingVertical: 1,
+              borderRadius: 7,
+              borderWidth: 1,
+              borderColor: `${hostColor(node.host)}66`,
+              backgroundColor: `${hostColor(node.host)}26`,
+            }}
+          >
+            <Text style={{ color: hostColor(node.host), fontSize: 9, fontWeight: "700" }}>
+              {node.host.label}
+            </Text>
+          </View>
+        ) : null}
         {node.kind === "subagent" ? (
           <Icon name="Bot" size={12} color={theme.colors.statusWarning} />
         ) : null}

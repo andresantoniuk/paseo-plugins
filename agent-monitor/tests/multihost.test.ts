@@ -7,7 +7,9 @@ import {
   baseProjectName,
   type GroupOptions,
   groupByProject,
+  HOST_PALETTE,
   type HostScope,
+  hostColor,
   hostOf,
   indexProjects,
   type MonitorDirectory,
@@ -100,6 +102,14 @@ describe("host scope", () => {
   test("search matches the host label", () => {
     expect(matches(withHostScope(entry(), ANTODESK), "antodesk")).toBe(true);
     expect(matches(withHostScope(entry(), ANTODESK), "antomac")).toBe(false);
+  });
+});
+
+describe("hostColor", () => {
+  test("is stable per server and comes from the shared palette", () => {
+    expect(hostColor(ANTODESK)).toBe(hostColor(ANTODESK));
+    expect(HOST_PALETTE).toContain(hostColor(ANTODESK));
+    expect(HOST_PALETTE).toContain(hostColor(MAC));
   });
 });
 
