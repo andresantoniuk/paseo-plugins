@@ -1,4 +1,4 @@
-import { getPaseoClient, usePaseo } from "@getpaseo/plugin/client";
+import { getPaseoClient, type usePaseo } from "@getpaseo/plugin/client";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import type { GraphEdge, InteractionData, SubagentInteraction } from "./graph";
@@ -147,24 +147,6 @@ export async function fetchInteractions(
     subagents: [...subagentMap.values()],
     unreadable,
   };
-}
-
-export function useInteractionGraph(
-  hostId: string,
-  entries: readonly AgentEntry[],
-  enabled: boolean,
-) {
-  const paseo = usePaseo();
-  const ids = entries
-    .map((entry) => entry.agent.id)
-    .sort()
-    .join(",");
-  return useQuery({
-    queryKey: ["agent-monitor", "interactions", hostId, ids],
-    queryFn: () => fetchInteractions(paseo, entries),
-    enabled: enabled && entries.length > 0,
-    staleTime: 20_000,
-  });
 }
 
 /**

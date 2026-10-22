@@ -1,4 +1,4 @@
-import { getPaseoClient, useHosts, usePaseo } from "@getpaseo/plugin/client";
+import { getPaseoClient, useHosts } from "@getpaseo/plugin/client";
 import { focusManager, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import {
@@ -234,39 +234,4 @@ export function useAllHostsMonitor(): MultiHostMonitor {
     isFetching: query.isFetching,
     refetchAll: () => void query.refetch(),
   };
-}
-
-/** The monitor's directory query. `select` derives a view without a second request. */
-export function useMonitorQuery<Selected = MonitorData>(
-  hostId: string,
-  select?: (data: MonitorData) => Selected,
-) {
-  const paseo = usePaseo();
-  const queryClient = useQueryClient();
-  const queryKey = useMemo(() => ["agent-monitor", "agents", hostId], [hostId]);
-  // One observation and backstop per connection and host, however many components read the data
-  // (the screen, the sidebar row, the popover). Keyed by the connection so a new one restarts it.
-  useEffect(
-    () =>
-      retainShared(paseo, queryKey.join("/"), () => {
-        // Hidden windows skip refreshes; React Query refetches the stale roster on refocus, which
-        // keeps the always-mounted sidebar row from polling a backgrounded app.
-        const invalidate = () => {
-          // cancelRefetch: false lets a slow in-flight load finish instead of restarting it each tick.
-          if (focusManager.isFocused()) {
-            void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
-          }
-        };
-        const invalidator = createDebouncedInvalidator(invalidate, REFRESH_DEBOUNCE_MS);
-        const stopObserving = observeDirectoryInvalidation(paseo, invalidator.invalidate);
-        const backstop = setInterval(invalidate, BACKSTOP_REFETCH_MS);
-        return () => {
-          clearInterval(backstop);
-          invalidator.cancel();
-          stopObserving();
-        };
-      }),
-    [paseo, queryClient, queryKey],
-  );
-  return useQuery({ queryKey, queryFn: () => loadDirectory(paseo), select });
 }
