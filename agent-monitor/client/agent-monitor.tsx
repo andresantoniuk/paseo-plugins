@@ -81,15 +81,20 @@ export function AgentMonitor(props: AgentMonitorProps) {
       }),
     );
     if (!request) return;
-    if (props.navigation) {
-      try {
-        props.navigation.openAgent({ agentId: request.agentId, serverId: request.serverId });
-        return;
-      } catch (error) {
-        console.warn("[agent-monitor] openAgent failed", String(error));
+    // Defer past this commit: a navigate dispatched while the pushed monitor
+    // route is still being committed is dropped by the router.
+    const handoff = setTimeout(() => {
+      if (props.navigation) {
+        try {
+          props.navigation.openAgent({ agentId: request.agentId, serverId: request.serverId });
+          return;
+        } catch (error) {
+          console.warn("[agent-monitor] openAgent failed", String(error));
+        }
       }
-    }
-    requestAgentFocus(request.agentId);
+      requestAgentFocus(request.agentId);
+    }, 0);
+    return () => clearTimeout(handoff);
   }, [props.navigation, props.openAgentToken]);
   const styles = useMemo(
     () => ({
