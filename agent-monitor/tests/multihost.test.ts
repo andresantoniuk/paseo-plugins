@@ -120,8 +120,8 @@ describe("attention quick access", () => {
   });
 });
 
-describe("lane layout", () => {
-  test("cluster panels never overlap, however many hosts share a project", () => {
+describe("layout panels", () => {
+  test("initial cluster panels never overlap, however many hosts share a project", () => {
     const projects = ["FINTERLACE", "fluxcow", "FLUXRIG", "infra", "intel", "knowledge", "QUINCE"];
     const scoped = projects.flatMap((project) =>
       [MAC, ANTODESK].map((host, hostIndex) =>

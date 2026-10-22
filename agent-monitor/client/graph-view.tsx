@@ -188,8 +188,11 @@ export function AgentGraph({
     [manual],
   );
 
-  // Lanes stay fixed at their layout positions: a dragged card floats above
-  // them instead of pulling its lane along, so lanes never overlap each other.
+  // The container hugs its cards wherever they are, dragged or not: the box is
+  // the bounding box of the current card positions plus padding. Boxes are
+  // translucent on purpose, so overlapping them while dragging reads as
+  // stacked glass instead of broken lanes. The header pill keeps each label
+  // readable over whatever sits behind it.
   const clusterBoxes = useMemo(() => {
     const groups = new Map<string, GraphNode[]>();
     for (const node of visibleNodes) {
@@ -215,10 +218,11 @@ export function AgentGraph({
       const hosts = new Set<string>();
       for (const node of group) {
         if (node.host) hosts.add(node.host.label);
-        left = Math.min(left, node.x);
-        top = Math.max(top, node.y);
-        right = Math.max(right, node.x + NODE_WIDTH);
-        bottom = Math.max(bottom, node.y + NODE_HEIGHT);
+        const position = positionOf(node);
+        left = Math.min(left, position.x);
+        top = Math.max(top, position.y);
+        right = Math.max(right, position.x + NODE_WIDTH);
+        bottom = Math.max(bottom, position.y + NODE_HEIGHT);
       }
       if (!Number.isFinite(left)) continue;
       const pad = 20;
@@ -235,7 +239,7 @@ export function AgentGraph({
       });
     }
     return boxes.sort((left, right) => left.name.localeCompare(right.name));
-  }, [visibleNodes]);
+  }, [positionOf, visibleNodes]);
 
   const focusIds = useMemo(() => {
     if (selectedEdge) return new Set([selectedEdge.from, selectedEdge.to]);
@@ -641,28 +645,37 @@ export function AgentGraph({
                   height: cluster.height,
                   borderRadius: 16,
                   overflow: "hidden",
-                  backgroundColor: color + "10",
+                  backgroundColor: color + "14",
                   borderWidth: 1,
-                  borderColor: color + "33",
+                  borderColor: color + "40",
                   opacity: clusterDimmed ? 0.18 : 1,
                 }}
               >
-                <Text
-                  numberOfLines={1}
-                  ellipsizeMode="tail"
+                <View
                   style={{
                     position: "absolute",
                     left: 12,
                     top: 8,
-                    width: cluster.width - 24,
-                    color,
-                    fontSize: 11,
-                    fontWeight: "700",
+                    maxWidth: cluster.width - 24,
+                    paddingHorizontal: 7,
+                    paddingVertical: 2,
+                    borderRadius: 7,
+                    backgroundColor: theme.colors.surface0 + "E6",
                   }}
                 >
-                  {cluster.name} · {cluster.count}
-                  {cluster.hosts.length > 1 ? ` · ${cluster.hosts.join(", ")}` : ""}
-                </Text>
+                  <Text
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    style={{
+                      color,
+                      fontSize: 11,
+                      fontWeight: "700",
+                    }}
+                  >
+                    {cluster.name} · {cluster.count}
+                    {cluster.hosts.length > 1 ? ` · ${cluster.hosts.join(", ")}` : ""}
+                  </Text>
+                </View>
               </View>
             );
           })}
