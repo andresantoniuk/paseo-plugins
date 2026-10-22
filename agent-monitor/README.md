@@ -122,6 +122,24 @@ paseo plugin install npm:@omercnet/paseo-agent-monitor
 paseo plugin update agent-monitor
 ```
 
+## Install on more than one host
+
+The monitor reads every online host no matter which installation renders it, so install it on each
+host whose client should keep working when the others are unreachable. The app groups the sidebar
+row by plugin and the surface keeps a host switcher, so two installs never show two rows.
+
+What stays per installation:
+
+- Settings (`scope: "host"`): grouping, sort, density, the default bucket and the display toggles
+  live on each host. Change them on both sides if you want them to match.
+- The bundle: reload every host after each change (`paseo plugin reload agent-monitor` on each
+  daemon) and keep both clones on the same commit. A stale bundle renders with old behavior, and
+  the only symptom is the surface behaving differently per selected host.
+
+The Mac daemon ships with plugins off; enable once with `"pluginsEnabled": true` in
+`~/.paseo/config.json` followed by `paseo reload` (the install itself is picked up without a
+restart). Removing one side later is `paseo plugin remove agent-monitor` on that host.
+
 ## Develop
 
 ```bash
