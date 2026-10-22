@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, Text, TextInput, View } from "react-native";
 import { initialBucket, type MonitorSettings, monitorSettings } from "../shared/monitor-settings";
+import { BUILD_ID } from "./build";
 import { DiffStat, type DiffStatStyles } from "./diff-stat";
 import { peekAgentFocus, takeAgentFocus } from "./focus-request";
 import { useAllHostsInteractionGraph } from "./graph-data";
@@ -308,6 +309,7 @@ function AgentMonitorRoster({
       viewToggleText: { color: muted, fontSize: 11 },
       viewToggleTextOn: { color: theme.colors.accentForeground, fontSize: 11 },
       summary: { flex: 1, color: muted, fontSize: 13 },
+      buildTag: { color: muted, fontSize: 10, opacity: 0.8 },
       syncing: { color: muted, fontSize: 11, opacity: 0.8 },
       syncingHidden: { opacity: 0 },
       chips: { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 8 },
@@ -772,6 +774,9 @@ function AgentMonitorRoster({
             {entries.length} agents on{" "}
             {multiHost ? `${hosts.length} hosts` : (hosts[0]?.label ?? "this host")}
             {truncated ? "+" : ""}
+          </Text>
+          <Text style={styles.buildTag} numberOfLines={1}>
+            · {BUILD_ID}
           </Text>
           <Text style={[styles.syncing, monitor.isFetching ? null : styles.syncingHidden]}>
             syncing
