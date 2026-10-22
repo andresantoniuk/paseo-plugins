@@ -54,10 +54,9 @@ type AgentMonitorProps = PluginSurfaceProps & {
    */
   agentParam?: string;
   /**
-   * A nonce asking this shallow screen to hand off to an agent's own screen.
-   * The sidebar popover cannot navigate, so it opens the monitor with a fresh
-   * nonce and leaves the target in module state; the token makes the handoff
-   * fire even when the screen is already mounted.
+   * A nonce the sidebar sends when it opens this screen for a handoff. The
+   * request itself travels in module state; the nonce only ties this screen
+   * open to it, and re-runs the handoff when the screen is already mounted.
    */
   openAgentToken?: string;
 };
@@ -71,16 +70,10 @@ export function AgentMonitor(props: AgentMonitorProps) {
   // back to the graph focus deep link.
   useLayoutEffect(() => {
     const request = takeAgentOpen();
-    console.warn(
-      "[agent-monitor] handoff",
-      JSON.stringify({
-        request: request && { token: request.token, agentId: request.agentId },
-        param: props.openAgentToken,
-        hasNavigation: Boolean(props.navigation),
-        openAgent: typeof props.navigation?.openAgent,
-      }),
-    );
-    if (!request) return;
+    // The token arrives as a screen param; without it this monitor open has
+    // nothing to hand off. Taking unconditionally keeps a stale request from
+    // firing on a later, unrelated visit.
+    if (!request || request.token !== props.openAgentToken) return;
     // Defer past this commit: a navigate dispatched while the pushed monitor
     // route is still being committed is dropped by the router.
     const handoff = setTimeout(() => {
@@ -88,8 +81,8 @@ export function AgentMonitor(props: AgentMonitorProps) {
         try {
           props.navigation.openAgent({ agentId: request.agentId, serverId: request.serverId });
           return;
-        } catch (error) {
-          console.warn("[agent-monitor] openAgent failed", String(error));
+        } catch {
+          // ignore: the focus fallback runs below
         }
       }
       requestAgentFocus(request.agentId);

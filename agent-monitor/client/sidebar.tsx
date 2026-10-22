@@ -131,10 +131,6 @@ function AttentionPopover({ theme, layout, openScreen }: PluginPopoverProps) {
           accessibilityLabel={`Open ${item.title}`}
           onPress={() => {
             const token = String(Date.now());
-            console.warn(
-              "[agent-monitor] quick-access",
-              JSON.stringify({ agentId: item.id, serverId: item.host?.serverId, token }),
-            );
             requestAgentOpen({ agentId: item.id, serverId: item.host?.serverId, token });
             openScreen({
               screenId: MONITOR_SCREEN_ID,
