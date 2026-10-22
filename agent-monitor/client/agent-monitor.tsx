@@ -71,14 +71,22 @@ export function AgentMonitor(props: AgentMonitorProps) {
   // back to the graph focus deep link.
   useLayoutEffect(() => {
     const request = takeAgentOpen();
-    if (!request || request.token !== props.openAgentToken) return;
+    console.warn(
+      "[agent-monitor] handoff",
+      JSON.stringify({
+        request: request && { token: request.token, agentId: request.agentId },
+        param: props.openAgentToken,
+        hasNavigation: Boolean(props.navigation),
+        openAgent: typeof props.navigation?.openAgent,
+      }),
+    );
+    if (!request) return;
     if (props.navigation) {
       try {
         props.navigation.openAgent({ agentId: request.agentId, serverId: request.serverId });
         return;
-      } catch {
-        // The agent may be gone by the time the click lands; fall through to
-        // selecting its card in the graph.
+      } catch (error) {
+        console.warn("[agent-monitor] openAgent failed", String(error));
       }
     }
     requestAgentFocus(request.agentId);
