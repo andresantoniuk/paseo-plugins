@@ -70,7 +70,10 @@ export function AgentGraph({
   navigation,
 }: GraphViewProps) {
   // Deep link from the sidebar quick access: select the requested card once.
-  // Later selections belong to the user.
+  // Later selections belong to the user. The filter-reset effect below also
+  // runs on mount, so it must skip the first run: otherwise it wipes the deep
+  // link before it ever renders.
+  const filtersMounted = useRef(false);
   useEffect(() => {
     if (focusedAgentId) {
       setSelectedEdge(null);
@@ -97,6 +100,10 @@ export function AgentGraph({
   panRef.current = pan;
 
   useEffect(() => {
+    if (!filtersMounted.current) {
+      filtersMounted.current = true;
+      return;
+    }
     setManual({});
     setSelectedId(null);
     setSelectedEdge(null);
