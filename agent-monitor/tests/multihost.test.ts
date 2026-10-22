@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { InteractionData } from "../client/graph";
-import { buildGraph } from "../client/graph";
+import { buildClusterBoxes, buildGraph, NODE_HEIGHT, NODE_WIDTH } from "../client/graph";
 import { mergeHostInteractions } from "../client/graph-data";
 import {
   type AgentEntry,
@@ -159,6 +159,64 @@ describe("layout panels", () => {
           a.y + a.height <= b.y ||
           b.y + b.height <= a.y;
         expect(separated, `${a.key} overlaps ${b.key}`).toBe(true);
+      }
+    }
+  });
+
+  test("a multi-row panel box wraps every card in it", () => {
+    const crowded = Array.from({ length: 6 }, (_, index) =>
+      withHostScope(
+        entry(
+          { id: `flux-${index}`, workspaceId: `ws-flux-${index}` },
+          { projectKey: "fluxrig", projectName: "FLUXRIG", workspaceName: "general" },
+        ),
+        ANTODESK,
+      ),
+    );
+    const layout = buildGraph(crowded, {
+      messagesByAgent: new Map(),
+      edges: [],
+      subagents: [],
+    });
+    const boxes = buildClusterBoxes(layout.nodes);
+    expect(boxes).toHaveLength(1);
+    const [box] = boxes;
+    if (!box) throw new Error("expected one cluster box");
+    for (const node of layout.nodes) {
+      expect(node.x).toBeGreaterThanOrEqual(box.x);
+      expect(node.y).toBeGreaterThanOrEqual(box.y);
+      expect(node.x + NODE_WIDTH).toBeLessThanOrEqual(box.x + box.width);
+      expect(node.y + NODE_HEIGHT).toBeLessThanOrEqual(box.y + box.height);
+    }
+  });
+
+  test("cluster boxes do not overlap in the initial layout", () => {
+    const projects = ["FINTERLACE", "fluxcow", "FLUXRIG", "infra", "intel", "knowledge", "QUINCE"];
+    const scoped = projects.flatMap((project) =>
+      Array.from({ length: project === "FLUXRIG" ? 7 : 1 }, (_, index) =>
+        withHostScope(
+          entry(
+            { id: `${project}-${index}`, workspaceId: `ws-${project}-${index}` },
+            { projectKey: project.toLowerCase(), projectName: project, workspaceName: "general" },
+          ),
+          ANTODESK,
+        ),
+      ),
+    );
+    const layout = buildGraph(scoped, {
+      messagesByAgent: new Map(),
+      edges: [],
+      subagents: [],
+    });
+    const boxes = buildClusterBoxes(layout.nodes);
+    for (const [index, left] of boxes.entries()) {
+      for (const right of boxes.slice(index + 1)) {
+        const separated =
+          left.x + left.width <= right.x ||
+          right.x + right.width <= left.x ||
+          left.y + left.height <= right.y ||
+          right.y + right.height <= left.y;
+        expect(separated, `${left.key} overlaps ${right.key}`).toBe(true);
       }
     }
   });

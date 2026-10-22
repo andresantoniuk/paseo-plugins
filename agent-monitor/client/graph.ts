@@ -74,6 +74,65 @@ export type GraphOptions = {
 export const NODE_WIDTH = 240;
 export const NODE_HEIGHT = 92;
 export const GRAPH_PADDING = 48;
+export const CLUSTER_PAD = 20;
+export const CLUSTER_HEADER = 30;
+
+export type ClusterBox = {
+  key: string;
+  name: string;
+  count: number;
+  hosts: string[];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+/**
+ * Bounding box of each project panel over the cards' current positions, so the
+ * container hugs the cards even after a drag. The box must span every card: if
+ * the top is computed from the bottom-most card the panel shrinks onto the last
+ * row and its header sits on top of the rows above it.
+ */
+export function buildClusterBoxes(
+  nodes: GraphNode[],
+  positionOf: (node: GraphNode) => { x: number; y: number } = (node) => ({ x: node.x, y: node.y }),
+): ClusterBox[] {
+  const groups = new Map<string, GraphNode[]>();
+  for (const node of nodes) {
+    const list = groups.get(node.colorKey);
+    if (list) list.push(node);
+    else groups.set(node.colorKey, [node]);
+  }
+  const boxes: ClusterBox[] = [];
+  for (const [key, group] of groups) {
+    let left = Number.POSITIVE_INFINITY;
+    let top = Number.POSITIVE_INFINITY;
+    let right = Number.NEGATIVE_INFINITY;
+    let bottom = Number.NEGATIVE_INFINITY;
+    const hosts = new Set<string>();
+    for (const node of group) {
+      if (node.host) hosts.add(node.host.label);
+      const position = positionOf(node);
+      left = Math.min(left, position.x);
+      top = Math.min(top, position.y);
+      right = Math.max(right, position.x + NODE_WIDTH);
+      bottom = Math.max(bottom, position.y + NODE_HEIGHT);
+    }
+    if (!Number.isFinite(left)) continue;
+    boxes.push({
+      key,
+      name: key.split(" · ")[0] || key,
+      count: group.length,
+      hosts: [...hosts].sort(),
+      x: left - CLUSTER_PAD,
+      y: top - CLUSTER_HEADER - CLUSTER_PAD,
+      width: right - left + CLUSTER_PAD * 2,
+      height: bottom - top + CLUSTER_PAD * 2 + CLUSTER_HEADER,
+    });
+  }
+  return boxes.sort((left, right) => left.name.localeCompare(right.name));
+}
 
 /** The project, workspace, branch and last cwd segment: enough to read the repo at a glance. */
 export function repoLabel(entry: AgentEntry): string {

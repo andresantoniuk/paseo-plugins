@@ -3,6 +3,7 @@ import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanResponder, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import {
+  buildClusterBoxes,
   buildGraph,
   edgeLabel,
   edgeThickness,
@@ -193,53 +194,10 @@ export function AgentGraph({
   // translucent on purpose, so overlapping them while dragging reads as
   // stacked glass instead of broken lanes. The header pill keeps each label
   // readable over whatever sits behind it.
-  const clusterBoxes = useMemo(() => {
-    const groups = new Map<string, GraphNode[]>();
-    for (const node of visibleNodes) {
-      const list = groups.get(node.colorKey);
-      if (list) list.push(node);
-      else groups.set(node.colorKey, [node]);
-    }
-    const boxes: Array<{
-      key: string;
-      name: string;
-      count: number;
-      hosts: string[];
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-    }> = [];
-    for (const [key, group] of groups) {
-      let left = Number.POSITIVE_INFINITY;
-      let top = Number.POSITIVE_INFINITY;
-      let right = Number.NEGATIVE_INFINITY;
-      let bottom = Number.NEGATIVE_INFINITY;
-      const hosts = new Set<string>();
-      for (const node of group) {
-        if (node.host) hosts.add(node.host.label);
-        const position = positionOf(node);
-        left = Math.min(left, position.x);
-        top = Math.max(top, position.y);
-        right = Math.max(right, position.x + NODE_WIDTH);
-        bottom = Math.max(bottom, position.y + NODE_HEIGHT);
-      }
-      if (!Number.isFinite(left)) continue;
-      const pad = 20;
-      const header = 30;
-      boxes.push({
-        key,
-        name: key.split(" · ")[0] || key,
-        count: group.length,
-        hosts: [...hosts].sort(),
-        x: left - pad,
-        y: top - header - pad,
-        width: right - left + pad * 2,
-        height: bottom - top + pad * 2 + header,
-      });
-    }
-    return boxes.sort((left, right) => left.name.localeCompare(right.name));
-  }, [positionOf, visibleNodes]);
+  const clusterBoxes = useMemo(
+    () => buildClusterBoxes(visibleNodes, positionOf),
+    [positionOf, visibleNodes],
+  );
 
   const focusIds = useMemo(() => {
     if (selectedEdge) return new Set([selectedEdge.from, selectedEdge.to]);
