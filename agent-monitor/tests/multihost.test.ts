@@ -233,6 +233,16 @@ describe("focus request", () => {
     expect(takeAgentFocus()).toBe("agent-1");
     expect(peekAgentFocus()).toBeNull();
   });
+
+  test("agent open keeps the target host and is consumed once", async () => {
+    const { peekAgentOpen, requestAgentOpen, takeAgentOpen } = await import(
+      "../client/focus-request"
+    );
+    requestAgentOpen({ agentId: "agent-1", serverId: "srv-1" });
+    expect(peekAgentOpen()).toEqual({ agentId: "agent-1", serverId: "srv-1" });
+    expect(takeAgentOpen()).toEqual({ agentId: "agent-1", serverId: "srv-1" });
+    expect(takeAgentOpen()).toBeNull();
+  });
 });
 
 describe("hostColor", () => {

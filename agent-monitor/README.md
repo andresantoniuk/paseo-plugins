@@ -65,9 +65,10 @@ screenshot uses the same synthetic project and agent names.
   page limit or a host fails to load, and the popover lists those agents however many hosts they
   span.
 - Press the badge for a popover of those agents, longest waiting first (up to eight), each
-  with its host pill, provider, and wait age. Tapping one opens the monitor in graph view with
-  that agent's card selected; **Open monitor** opens the roster filtered to Attention. (The
-  popover has no navigation of its own, so agents still open through the monitor.)
+  with its host pill, provider, and wait age. Tapping one opens that agent's own screen on its
+  host; **Open monitor** opens the roster filtered to Attention. Paseo 0.12 gives popovers no
+  navigation, so the row opens the monitor with a one-shot handoff that the screen consumes
+  before it paints.
 - The monitor screen accepts a `bucket` param (`attention`, `running`, `idle`, `closed`, or `all`)
   as its initial filter, so a link such as `…/surface/monitor?param.bucket=attention` opens
   filtered and keeps that filter on reload. Chips then filter in place without changing the URL.
@@ -97,16 +98,17 @@ group (a per-host display suffix such as `FINTERLACE · mac` does not split the 
 adds a host filter row, shows the host in node details, and opens agents and workspaces on their
 own host through the navigation `serverId`. Timeline sweeps run per host and merge, and archive
 fans out to the owning host of each agent. A host that fails to load is named in a warning while
-the rest keep working; the sidebar badge stays per host. Every agent card carries a host pill in
-the host's color, panels spanning hosts list them, and workspace and project headers name their
-hosts, so each agent's host is visible at a glance.
+the rest keep working; the sidebar badge counts every online host. Every agent card carries a
+host pill in the host's color, panels spanning hosts list them, and workspace and project headers
+name their hosts, so each agent's host is visible at a glance.
 
 ## Limits
 
 Interrupting a turn is not part of `PaseoApi`, so archive is the only lifecycle action here.
 
-The sidebar popover lists agents but cannot open them: Paseo 0.12 gives popovers no navigation.
-Open the monitor and select the agent there.
+Popovers get no navigation in Paseo 0.12, so a popover row reaches an agent through the monitor
+screen, which hands off to the agent before painting. On hosts without navigation the same tap
+falls back to selecting the agent's card in the graph.
 
 ## Install
 

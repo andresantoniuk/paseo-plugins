@@ -1,12 +1,18 @@
 import { getPaseoClient, type PluginSurfaceProps, useSettings } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMutation } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, Text, TextInput, View } from "react-native";
 import { initialBucket, type MonitorSettings, monitorSettings } from "../shared/monitor-settings";
 import { BUILD_ID } from "./build";
 import { DiffStat, type DiffStatStyles } from "./diff-stat";
-import { peekAgentFocus, takeAgentFocus } from "./focus-request";
+import {
+  peekAgentFocus,
+  peekAgentOpen,
+  requestAgentFocus,
+  takeAgentFocus,
+  takeAgentOpen,
+} from "./focus-request";
 import { useAllHostsInteractionGraph } from "./graph-data";
 import { AgentGraph } from "./graph-view";
 import {
@@ -50,14 +56,38 @@ type AgentMonitorProps = PluginSurfaceProps & {
    */
   bucketParam?: string;
   /**
-   * An agent id to focus when the screen opens (e.g. from the sidebar quick
-   * access). The monitor switches to the graph with that card selected, once.
+   * An agent id to focus when the screen opens (e.g. from a saved link). The
+   * monitor switches to the graph with that card selected, once.
    */
   agentParam?: string;
+  /**
+   * A nonce asking this shallow screen to hand off to an agent's own screen.
+   * The sidebar popover cannot navigate, so it opens the monitor with a fresh
+   * nonce and leaves the target in module state; the token makes the handoff
+   * fire even when the screen is already mounted.
+   */
+  openAgentToken?: string;
 };
 
 export function AgentMonitor(props: AgentMonitorProps) {
   const settingsState = useSettings(monitorSettings);
+  // Hand off to the agent's own screen when the sidebar quick access asked for
+  // it, before painting the monitor. Hosts without navigation fall back to the
+  // graph focus deep link.
+  const [redirecting, setRedirecting] = useState(() => peekAgentOpen() !== null);
+  useLayoutEffect(() => {
+    const request = takeAgentOpen();
+    if (!request) {
+      setRedirecting(false);
+      return;
+    }
+    if (props.navigation) {
+      props.navigation.openAgent({ agentId: request.agentId, serverId: request.serverId });
+      return;
+    }
+    requestAgentFocus(request.agentId);
+    setRedirecting(false);
+  }, [props.navigation, props.openAgentToken]);
   const styles = useMemo(
     () => ({
       screen: {
@@ -84,6 +114,8 @@ export function AgentMonitor(props: AgentMonitorProps) {
     }),
     [props.layout.compact, props.theme],
   );
+
+  if (redirecting) return null;
 
   if (settingsAreReady(settingsState)) {
     return <AgentMonitorRoster {...props} settings={settingsState.values} />;
