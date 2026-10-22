@@ -254,14 +254,20 @@ export function AgentGraph({
 
   // Tapping a card opens its agent straight away; there is no intermediate
   // details panel. Dragging still moves the card (the responder distinguishes).
+  // Provider subagents and hosts without navigation fall back to selecting the
+  // card, so the tap still highlights its cluster and edges.
   const openNode = useCallback(
     (id: string) => {
       const node = visibleById.get(id);
-      if (!node?.agentId) return;
-      navigation?.openAgent({
-        agentId: node.agentId,
-        ...(node.host ? { serverId: node.host.serverId } : null),
-      });
+      if (node?.agentId && navigation) {
+        navigation.openAgent({
+          agentId: node.agentId,
+          ...(node.host ? { serverId: node.host.serverId } : null),
+        });
+        return;
+      }
+      setSelectedEdge(null);
+      setSelectedId((current) => (current === id ? null : id));
     },
     [navigation, visibleById],
   );
@@ -973,7 +979,7 @@ function GraphNodeView({
     <View
       {...responder.panHandlers}
       accessibilityRole="button"
-      accessibilityLabel={`Open agent ${node.title}`}
+      accessibilityLabel={node.agentId ? `Open agent ${node.title}` : `Select ${node.title}`}
       style={{
         position: "absolute",
         left: position.x,

@@ -180,16 +180,20 @@ export function attentionItems(entries: readonly AgentEntry[]): AttentionItem[] 
 }
 
 /**
- * The count to show, or null when it cannot be trusted: still loading, or the last refresh failed
- * so the cached roster may be stale. A truncated roster is a lower bound.
+ * The count to show, or null when it cannot be trusted: still loading, or a
+ * host failed with no rows at all. Otherwise a truncated roster or a failed
+ * host makes the count a lower bound, because the missing rows might include
+ * agents that need attention.
  */
 export function attentionCount(state: {
   items: readonly AttentionItem[] | undefined;
   truncated: boolean;
   failed: boolean;
+  loading?: boolean;
 }): { count: number; lowerBound: boolean } | null {
-  if (!state.items || state.failed) return null;
-  return { count: state.items.length, lowerBound: state.truncated };
+  if (!state.items) return null;
+  if (state.items.length === 0 && (state.failed || state.loading)) return null;
+  return { count: state.items.length, lowerBound: state.truncated || state.failed };
 }
 
 export function stateLabel(agent: AgentSnapshot): string {
@@ -503,10 +507,15 @@ export function mergeProjectGroupsAcrossHosts(all: readonly HostedProjectGroups[
       const name = baseProjectName(project.name);
       const existing = merged.get(name);
       if (!existing) {
-        merged.set(name, { ...project, id: name, name, pinned: project.pinned });
+        merged.set(name, {
+          ...project,
+          id: name,
+          name,
+          workspaces: [...project.workspaces],
+        });
         continue;
       }
-      existing.workspaces.push(...project.workspaces);
+      existing.workspaces = [...existing.workspaces, ...project.workspaces];
       existing.pinned = existing.pinned || project.pinned;
     }
   }

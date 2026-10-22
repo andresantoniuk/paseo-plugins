@@ -9,11 +9,14 @@ let pendingAgentId: string | null = null;
 /**
  * A pending request to open an agent's own screen instead of the graph. The
  * sidebar popover cannot navigate (it only receives `openScreen`), so it leaves
- * the request here and the monitor screen consumes it once.
+ * the request here and the monitor screen consumes it once. The token ties the
+ * request to the screen open that carried it, so a request whose screen never
+ * mounted cannot fire on a later, unrelated monitor visit.
  */
 export type AgentOpenRequest = {
   agentId: string;
   serverId?: string;
+  token: string;
 };
 let pendingOpen: AgentOpenRequest | null = null;
 

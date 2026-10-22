@@ -21,7 +21,6 @@ import {
   monitorSettings,
   SORT_OPTIONS,
 } from "../shared/monitor-settings";
-import { BUILD_ID } from "./build";
 
 type ReadySettings = Extract<SettingsState<typeof monitorSettings.schema>, { status: "ready" }>;
 type ToggleKey =
@@ -180,9 +179,6 @@ function Controls({
         <SettingsCard>
           <SettingsRow label="Persistence" hint="Shared by every client connected to this host">
             <Text style={styles.value}>{settings.saving ? "Saving…" : "Saved on host"}</Text>
-          </SettingsRow>
-          <SettingsRow label="Build" hint="Client bundle running on this machine">
-            <Text style={styles.value}>{BUILD_ID}</Text>
           </SettingsRow>
           <SettingsAction
             label="Restore default settings"

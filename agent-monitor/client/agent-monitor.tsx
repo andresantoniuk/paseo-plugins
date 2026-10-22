@@ -4,15 +4,8 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, Text, TextInput, View } from "react-native";
 import { initialBucket, type MonitorSettings, monitorSettings } from "../shared/monitor-settings";
-import { BUILD_ID } from "./build";
 import { DiffStat, type DiffStatStyles } from "./diff-stat";
-import {
-  peekAgentFocus,
-  peekAgentOpen,
-  requestAgentFocus,
-  takeAgentFocus,
-  takeAgentOpen,
-} from "./focus-request";
+import { peekAgentFocus, requestAgentFocus, takeAgentFocus, takeAgentOpen } from "./focus-request";
 import { useAllHostsInteractionGraph } from "./graph-data";
 import { AgentGraph } from "./graph-view";
 import {
@@ -72,21 +65,23 @@ type AgentMonitorProps = PluginSurfaceProps & {
 export function AgentMonitor(props: AgentMonitorProps) {
   const settingsState = useSettings(monitorSettings);
   // Hand off to the agent's own screen when the sidebar quick access asked for
-  // it, before painting the monitor. Hosts without navigation fall back to the
-  // graph focus deep link.
-  const [redirecting, setRedirecting] = useState(() => peekAgentOpen() !== null);
+  // it. The handoff runs in a layout effect so it lands before the monitor
+  // paints, but the monitor still renders: if the navigation loses a race the
+  // user sees the roster, never a blank screen. Hosts without navigation fall
+  // back to the graph focus deep link.
   useLayoutEffect(() => {
     const request = takeAgentOpen();
-    if (!request) {
-      setRedirecting(false);
-      return;
-    }
+    if (!request || request.token !== props.openAgentToken) return;
     if (props.navigation) {
-      props.navigation.openAgent({ agentId: request.agentId, serverId: request.serverId });
-      return;
+      try {
+        props.navigation.openAgent({ agentId: request.agentId, serverId: request.serverId });
+        return;
+      } catch {
+        // The agent may be gone by the time the click lands; fall through to
+        // selecting its card in the graph.
+      }
     }
     requestAgentFocus(request.agentId);
-    setRedirecting(false);
   }, [props.navigation, props.openAgentToken]);
   const styles = useMemo(
     () => ({
@@ -114,8 +109,6 @@ export function AgentMonitor(props: AgentMonitorProps) {
     }),
     [props.layout.compact, props.theme],
   );
-
-  if (redirecting) return null;
 
   if (settingsAreReady(settingsState)) {
     return <AgentMonitorRoster {...props} settings={settingsState.values} />;
@@ -341,7 +334,6 @@ function AgentMonitorRoster({
       viewToggleText: { color: muted, fontSize: 11 },
       viewToggleTextOn: { color: theme.colors.accentForeground, fontSize: 11 },
       summary: { flex: 1, color: muted, fontSize: 13 },
-      buildTag: { color: muted, fontSize: 10, opacity: 0.8 },
       syncing: { color: muted, fontSize: 11, opacity: 0.8 },
       syncingHidden: { opacity: 0 },
       chips: { flexDirection: "row" as const, flexWrap: "wrap" as const, gap: 8 },
@@ -806,9 +798,6 @@ function AgentMonitorRoster({
             {entries.length} agents on{" "}
             {multiHost ? `${hosts.length} hosts` : (hosts[0]?.label ?? "this host")}
             {truncated ? "+" : ""}
-          </Text>
-          <Text style={styles.buildTag} numberOfLines={1}>
-            · {BUILD_ID}
           </Text>
           <Text style={[styles.syncing, monitor.isFetching ? null : styles.syncingHidden]}>
             syncing

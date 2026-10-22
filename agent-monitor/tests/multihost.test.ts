@@ -238,9 +238,9 @@ describe("focus request", () => {
     const { peekAgentOpen, requestAgentOpen, takeAgentOpen } = await import(
       "../client/focus-request"
     );
-    requestAgentOpen({ agentId: "agent-1", serverId: "srv-1" });
-    expect(peekAgentOpen()).toEqual({ agentId: "agent-1", serverId: "srv-1" });
-    expect(takeAgentOpen()).toEqual({ agentId: "agent-1", serverId: "srv-1" });
+    requestAgentOpen({ agentId: "agent-1", serverId: "srv-1", token: "t-1" });
+    expect(peekAgentOpen()).toEqual({ agentId: "agent-1", serverId: "srv-1", token: "t-1" });
+    expect(takeAgentOpen()).toEqual({ agentId: "agent-1", serverId: "srv-1", token: "t-1" });
     expect(takeAgentOpen()).toBeNull();
   });
 });

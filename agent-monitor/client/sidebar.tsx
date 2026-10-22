@@ -3,7 +3,7 @@ import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { requestAgentOpen } from "./focus-request";
-import { type AttentionItem, age, attentionItems, hostColor } from "./monitor";
+import { type AttentionItem, age, attentionCount, attentionItems, hostColor } from "./monitor";
 import { useAllHostsMonitor } from "./monitor-data";
 
 export const MONITOR_SCREEN_ID = "monitor";
@@ -17,14 +17,14 @@ const POPOVER_LIMIT = 8;
 function useAttention() {
   const monitor = useAllHostsMonitor();
   const items = useMemo(() => attentionItems(monitor.entries), [monitor.entries]);
-  const failed = monitor.failedHosts.length > 0;
-  const loading = monitor.isPending && items.length === 0;
   return {
     items,
-    summary:
-      loading || (failed && items.length === 0)
-        ? null
-        : { count: items.length, lowerBound: monitor.truncated || failed },
+    summary: attentionCount({
+      items,
+      truncated: monitor.truncated,
+      failed: monitor.failedHosts.length > 0,
+      loading: monitor.isPending,
+    }),
   };
 }
 
@@ -130,10 +130,11 @@ function AttentionPopover({ theme, layout, openScreen }: PluginPopoverProps) {
           accessibilityRole="button"
           accessibilityLabel={`Open ${item.title}`}
           onPress={() => {
-            requestAgentOpen({ agentId: item.id, serverId: item.host?.serverId });
+            const token = String(Date.now());
+            requestAgentOpen({ agentId: item.id, serverId: item.host?.serverId, token });
             openScreen({
               screenId: MONITOR_SCREEN_ID,
-              params: { openAgent: item.id, t: String(Date.now()) },
+              params: { openAgent: token },
             });
           }}
           style={styles.rowPress}

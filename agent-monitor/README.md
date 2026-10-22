@@ -67,8 +67,8 @@ screenshot uses the same synthetic project and agent names.
 - Press the badge for a popover of those agents, longest waiting first (up to eight), each
   with its host pill, provider, and wait age. Tapping one opens that agent's own screen on its
   host; **Open monitor** opens the roster filtered to Attention. Paseo 0.12 gives popovers no
-  navigation, so the row opens the monitor with a one-shot handoff that the screen consumes
-  before it paints.
+  navigation, so the row opens the monitor with a one-shot handoff that the screen consumes as
+  it mounts, before the roster paints.
 - The monitor screen accepts a `bucket` param (`attention`, `running`, `idle`, `closed`, or `all`)
   as its initial filter, so a link such as `…/surface/monitor?param.bucket=attention` opens
   filtered and keeps that filter on reload. Chips then filter in place without changing the URL.
@@ -107,8 +107,9 @@ name their hosts, so each agent's host is visible at a glance.
 Interrupting a turn is not part of `PaseoApi`, so archive is the only lifecycle action here.
 
 Popovers get no navigation in Paseo 0.12, so a popover row reaches an agent through the monitor
-screen, which hands off to the agent before painting. On hosts without navigation the same tap
-falls back to selecting the agent's card in the graph.
+screen, which hands off to the agent as it mounts. If the handoff cannot happen, the monitor
+renders normally instead of leaving a blank screen; on hosts without navigation the same tap
+selects the agent's card in the graph.
 
 ## Install
 
