@@ -1,7 +1,9 @@
-import { usePaseo } from "@getpaseo/plugin/client";
+import { getPaseoClient, type usePaseo } from "@getpaseo/plugin/client";
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import type { GraphEdge, InteractionData, SubagentInteraction } from "./graph";
-import type { AgentEntry } from "./monitor";
+import type { AgentEntry, HostScope } from "./monitor";
+import { hostOf } from "./monitor";
 
 const TIMELINE_LIMIT = 200;
 const MAX_AGENTS = 60;
@@ -105,10 +107,7 @@ export async function fetchInteractions(
             const item = row.item as TimelineItem;
             if (!item) continue;
             if (item.type === "user_message" || item.type === "assistant_message") {
-              messagesByAgent.set(
-                entry.agent.id,
-                (messagesByAgent.get(entry.agent.id) ?? 0) + 1,
-              );
+              messagesByAgent.set(entry.agent.id, (messagesByAgent.get(entry.agent.id) ?? 0) + 1);
             }
             if (item.type !== "tool_call") continue;
 
@@ -150,20 +149,75 @@ export async function fetchInteractions(
   };
 }
 
-export function useInteractionGraph(
-  hostId: string,
+/**
+ * Merge per-host interaction data. Agent ids are daemon-scoped UUIDs, so edges
+ * and subagent nodes concatenate; the per-host fetch keeps id-to-agent maps
+ * from leaking across hosts.
+ */
+export function mergeHostInteractions(parts: ReadonlyArray<InteractionData>): InteractionData {
+  const messagesByAgent = new Map<string, number>();
+  const edges: GraphEdge[] = [];
+  const subagents: SubagentInteraction[] = [];
+  let unreadable = 0;
+  for (const part of parts) {
+    for (const [agentId, count] of part.messagesByAgent) {
+      messagesByAgent.set(agentId, (messagesByAgent.get(agentId) ?? 0) + count);
+    }
+    edges.push(...part.edges);
+    subagents.push(...part.subagents);
+    unreadable += part.unreadable ?? 0;
+  }
+  return { messagesByAgent, edges, subagents, unreadable };
+}
+
+/**
+ * The graph's multi-host interaction query: one timeline sweep per host that
+ * has visible entries, merged into a single interaction set.
+ */
+export function useAllHostsInteractionGraph(
+  hosts: readonly HostScope[],
   entries: readonly AgentEntry[],
   enabled: boolean,
 ) {
-  const paseo = usePaseo();
-  const ids = entries
-    .map((entry) => entry.agent.id)
-    .sort()
-    .join(",");
+  const byHost = useMemo(() => {
+    const grouped = new Map<string, { host: HostScope; entries: AgentEntry[] }>();
+    for (const host of hosts) grouped.set(host.serverId, { host, entries: [] });
+    for (const entry of entries) {
+      const scope = hostOf(entry);
+      const group = scope ? grouped.get(scope.serverId) : undefined;
+      if (group) group.entries.push(entry);
+    }
+    return [...grouped.values()].filter((group) => group.entries.length > 0);
+  }, [hosts, entries]);
+  const ids = byHost
+    .map((group) =>
+      group.entries
+        .map((entry) => entry.agent.id)
+        .sort()
+        .join(","),
+    )
+    .join("|");
+  const hostIds = byHost.map((group) => group.host.serverId).join(",");
   return useQuery({
-    queryKey: ["agent-monitor", "interactions", hostId, ids],
-    queryFn: () => fetchInteractions(paseo, entries),
-    enabled: enabled && entries.length > 0,
+    queryKey: ["agent-monitor", "interactions", "all", hostIds, ids],
+    queryFn: async () => {
+      const parts = await Promise.all(
+        byHost.map(async (group) => {
+          try {
+            return await fetchInteractions(getPaseoClient(group.host.serverId), group.entries);
+          } catch {
+            return {
+              messagesByAgent: new Map<string, number>(),
+              edges: [],
+              subagents: [],
+              unreadable: group.entries.length,
+            } satisfies InteractionData;
+          }
+        }),
+      );
+      return mergeHostInteractions(parts);
+    },
+    enabled: enabled && byHost.length > 0,
     staleTime: 20_000,
   });
 }

@@ -1,14 +1,18 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { PaseoApi } from "../client/monitor";
-import { loadAgents, loadWorkspaces, useMonitorQuery } from "../client/monitor-data";
+import { loadAgents, loadWorkspaces, useAllHostsMonitor } from "../client/monitor-data";
 
 const hooks = vi.hoisted(() => ({
-  paseo: undefined as unknown,
+  hosts: [] as Array<{ serverId: string; label: string; status: string }>,
+  clients: {} as Record<string, unknown>,
   effects: [] as Array<() => undefined | (() => void)>,
   query: undefined as undefined | { queryFn: () => Promise<unknown> },
 }));
 
-vi.mock("@getpaseo/plugin/client", () => ({ usePaseo: () => hooks.paseo }));
+vi.mock("@getpaseo/plugin/client", () => ({
+  useHosts: () => hooks.hosts,
+  getPaseoClient: (serverId: string) => hooks.clients[serverId],
+}));
 vi.mock("@tanstack/react-query", () => ({
   focusManager: { isFocused: () => true },
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
@@ -37,6 +41,8 @@ function pagedList<T>(...pages: T[][]) {
 }
 
 beforeEach(() => {
+  hooks.hosts = [];
+  hooks.clients = {};
   hooks.effects.length = 0;
   hooks.query = undefined;
 });
@@ -88,15 +94,15 @@ describe("directory loaders", () => {
   });
 });
 
-describe("useMonitorQuery", () => {
-  function connect() {
+describe("useAllHostsMonitor", () => {
+  function connect(entryId: string) {
     const release = vi.fn(async () => {});
     const subscription = { subscribe: vi.fn(() => () => {}), release };
     const agents = {
       list: vi.fn(async (options: Record<string, unknown>) =>
         options.subscribe
           ? { subscription }
-          : { entries: [{ id: "a" }], pageInfo: { hasMore: false, nextCursor: null } },
+          : { entries: [{ id: entryId }], pageInfo: { hasMore: false, nextCursor: null } },
       ),
     };
     const workspaces = {
@@ -131,21 +137,30 @@ describe("useMonitorQuery", () => {
       })),
       subscribe: vi.fn(() => () => {}),
     };
-    hooks.paseo = { agents, workspaces, projects };
-    return { agents, workspaces };
+    return { agents, workspaces, projects };
   }
 
-  test("loads the directory with background workspaces and observes them", async () => {
-    const { agents, workspaces } = connect();
+  test("merges every online host and observes each one", async () => {
+    const hostA = connect("alpha-entry");
+    const hostB = connect("beta-entry");
+    hooks.clients = { "srv-a": hostA, "srv-b": hostB };
+    hooks.hosts = [
+      { serverId: "srv-a", label: "alpha", status: "online" },
+      { serverId: "srv-off", label: "offline", status: "offline" },
+      { serverId: "srv-b", label: "beta", status: "online" },
+    ];
 
-    useMonitorQuery("host");
+    useAllHostsMonitor();
     const data = (await hooks.query?.queryFn()) as {
-      entries: unknown[];
+      hosts: Array<{ label: string }>;
+      entries: Array<{ id: string; hostScope?: { label: string } }>;
       directory: { workspaces: Map<string, unknown>; projects: Map<string, { name: string }> };
       truncated: boolean;
     };
 
-    expect(data.entries).toEqual([{ id: "a" }]);
+    expect(data.hosts.map((host) => host.label)).toEqual(["alpha", "beta"]);
+    expect(data.entries.map((entry) => entry.id).sort()).toEqual(["alpha-entry", "beta-entry"]);
+    expect(data.entries.map((entry) => entry.hostScope?.label).sort()).toEqual(["alpha", "beta"]);
     expect(data.truncated).toBe(false);
     expect(data.directory.workspaces.get("w1")).toMatchObject({
       name: "main",
@@ -155,10 +170,15 @@ describe("useMonitorQuery", () => {
     });
     expect(data.directory.projects.get("p1")?.name).toBe("Renamed");
 
-    const cleanup = hooks.effects[0]?.();
+    const cleanups = hooks.effects.map((effect) => effect()).filter(Boolean);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(agents.list).toHaveBeenCalledWith({ subscribe: {}, includeBackground: true });
-    expect(workspaces.list).toHaveBeenCalledWith({ subscribe: {}, includeBackground: true });
-    if (typeof cleanup === "function") cleanup();
+    for (const client of [hostA, hostB]) {
+      expect(client.agents.list).toHaveBeenCalledWith({ subscribe: {}, includeBackground: true });
+      expect(client.workspaces.list).toHaveBeenCalledWith({
+        subscribe: {},
+        includeBackground: true,
+      });
+    }
+    for (const cleanup of cleanups) if (typeof cleanup === "function") cleanup();
   });
 });

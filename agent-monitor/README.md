@@ -52,19 +52,23 @@ screenshot uses the same synthetic project and agent names.
   project/workspace panels; provider-native subagents appear as dashed nodes. Edges encode parent
   hand-offs, timeline message provenance, and subagent dispatches, with thickness scaled by message
   count. Drag cards, pan the canvas, zoom with the wheel or a trackpad pinch, filter by project,
-  workspace, provider, subagents, or connected-only, and select a card or edge to focus its
-  neighbourhood and dim the rest.
+  workspace, provider, subagents, or connected-only. Tapping a card opens that agent straight away;
+  tapping an edge focuses its neighbourhood and dims the rest.
 - Select an agent row to open that agent, or select a workspace header (or its folder button when
   collapsed) to open its workspace through Paseo's cross-platform navigation API.
 - Archive one agent, or sweep every closed agent (two taps).
 
 ## Sidebar row
 
-- The row's badge counts the Attention bucket, using the same rule as the roster. It shows no
-  number while the roster loads or after a refresh fails, and `N+` once the agent list reaches the
-  2,000-agent page limit.
-- Press the badge for a popover of those agents, longest waiting first (up to eight), with
-  **Open monitor**, which opens the roster filtered to Attention.
+- The row's badge counts the Attention bucket across every online host, using the same rule
+  as the roster. It shows no number while loading, `N+` once an agent list reaches the 2,000-agent
+  page limit or a host fails to load, and the popover lists those agents however many hosts they
+  span.
+- Press the badge for a popover of those agents, longest waiting first (up to eight), each
+  with its host pill, provider, and wait age. Tapping one opens that agent's own screen on its
+  host; **Open monitor** opens the roster filtered to Attention. Paseo 0.12 gives popovers no
+  navigation, so the row opens the monitor with a one-shot handoff that the screen consumes as
+  it mounts, before the roster paints.
 - The monitor screen accepts a `bucket` param (`attention`, `running`, `idle`, `closed`, or `all`)
   as its initial filter, so a link such as `…/surface/monitor?param.bucket=attention` opens
   filtered and keeps that filter on reload. Chips then filter in place without changing the URL.
@@ -85,12 +89,27 @@ The graph reads the tail of each agent's timeline (200 entries, up to 60 agents,
 derive message and subagent edges. Closed agents or unreadable timelines contribute no edges, and
 the graph never opens a separate connection of its own.
 
+## Multiple hosts
+
+When the client connects to more than one host, the monitor merges every online host into one
+screen. The header counts agents across hosts, host chips filter the roster, rows show their host
+in compact placement lines, and project groups merge by base name so one project reads as one
+group (a per-host display suffix such as `ACME · alpha` does not split the group). The graph
+adds a host filter row, shows the host in node details, and opens agents and workspaces on their
+own host through the navigation `serverId`. Timeline sweeps run per host and merge, and archive
+fans out to the owning host of each agent. A host that fails to load is named in a warning while
+the rest keep working; the sidebar badge counts every online host. Every agent card carries a
+host pill in the host's color, panels spanning hosts list them, and workspace and project headers
+name their hosts, so each agent's host is visible at a glance.
+
 ## Limits
 
 Interrupting a turn is not part of `PaseoApi`, so archive is the only lifecycle action here.
 
-The sidebar popover lists agents but cannot open them: Paseo 0.12 gives popovers no navigation.
-Open the monitor and select the agent there.
+Popovers get no navigation in Paseo 0.12, so a popover row reaches an agent through the monitor
+screen, which hands off to the agent as it mounts. If the handoff cannot happen, the monitor
+renders normally instead of leaving a blank screen; on hosts without navigation the same tap
+selects the agent's card in the graph.
 
 ## Install
 
@@ -102,6 +121,24 @@ Install the published package on the daemon host:
 paseo plugin install npm:@omercnet/paseo-agent-monitor
 paseo plugin update agent-monitor
 ```
+
+## Install on more than one host
+
+The monitor reads every online host no matter which installation renders it, so install it on each
+host whose client should keep working when the others are unreachable. The app groups the sidebar
+row by plugin and the surface keeps a host switcher, so two installs never show two rows.
+
+What stays per installation:
+
+- Settings (`scope: "host"`): grouping, sort, density, the default bucket and the display toggles
+  live on each host. Change them on both sides if you want them to match.
+- The bundle: reload every host after each change (`paseo plugin reload agent-monitor` on each
+  daemon) and keep both clones on the same commit. A stale bundle renders with old behavior, and
+  the only symptom is the surface behaving differently per selected host.
+
+A daemon with plugins disabled rejects plugin calls; enable once with `"pluginsEnabled": true`
+in its `config.json` followed by `paseo reload` (the install itself is picked up without a
+restart). Removing one side later is `paseo plugin remove agent-monitor` on that host.
 
 ## Develop
 

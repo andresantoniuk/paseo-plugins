@@ -71,9 +71,7 @@ describe("buildGraph", () => {
     expect(layout.nodes).toHaveLength(2);
     expect(layout.byId.has("child")).toBe(true);
     expect(layout.byId.has("parent")).toBe(true);
-    expect(layout.edges).toEqual([
-      { from: "parent", to: "child", count: 7, kind: "tree" },
-    ]);
+    expect(layout.edges).toEqual([{ from: "parent", to: "child", count: 7, kind: "tree" }]);
   });
 
   it("merges a timeline message edge between agents with no parent link", () => {
