@@ -927,7 +927,7 @@ function AgentMonitorRoster({
       </View>
       {failedHosts.length > 0 ? (
         <Text style={styles.error}>
-          {failedHosts.join(", ")} unreachable — showing the remaining hosts
+          {failedHosts.join(", ")} unreachable, showing the remaining hosts
         </Text>
       ) : null}
       {archive.error ? <Text style={styles.error}>{archive.error.message}</Text> : null}
