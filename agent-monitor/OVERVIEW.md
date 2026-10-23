@@ -6,4 +6,4 @@ The header switches between the **Roster** and a **Graph** view. The graph group
 
 It reads agent, workspace and project lists through the selected host's existing connection and opens no connection of its own. The one action it performs is archiving, either a single agent or all closed agents. It cannot interrupt a running turn.
 
-Requires Paseo ^0.12.0.
+Requires Paseo ^0.13.0.

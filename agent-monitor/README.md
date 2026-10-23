@@ -23,7 +23,7 @@ screenshot uses the same synthetic project and agent names.
 
 ### Graph view
 
-![Agent Monitor graph view](docs/images/agent-graph.png)
+![Agent Monitor graph view](https://raw.githubusercontent.com/omercnet/paseo-plugins/main/agent-monitor/docs/images/agent-graph.png)
 
 ### Monitor settings
 
@@ -40,13 +40,13 @@ screenshot uses the same synthetic project and agent names.
   collapse of matching workspace headers, density, default bucket, whether Closed stays out of
   All, and display toggles for diffs, pin markers, model, wait age, subagent counts, last error, and
   compact placement. Preferences are a typed, host-scoped document shared by connected clients.
-  New hosts open on Attention by default; choose All or another bucket in Monitor settings.
 - Workspace headers show up to two workspace labels and current `+additions −deletions`
   (additions in the success color, deletions in danger when color diffs are on).
 - Per row: a status dot that separates errors (danger) from agents waiting on you (warning) and
   running agents (success), state and wait age on a right-aligned rail (`attentionTimestamp`,
   falling back to `updatedAt`), model, and `lastError` inline.
 - Parent rows show their subagent count; child rows use a left indent guide.
+- Agents delegated from another host (`paseo.parent-server-id` names a different host) are listed as top-level rows with a "Delegated from `<host>`" hint. They are never counted under, or indented below, a local agent that happens to share the parent id.
 - Text filter over title, agent id, provider, model, cwd, project, and workspace.
 - **Graph view**: switch the header between Roster and Graph. Agents sit in compact
   project/workspace panels; provider-native subagents appear as dashed nodes. Edges encode parent
@@ -89,12 +89,12 @@ the graph never opens a separate connection of its own.
 
 Interrupting a turn is not part of `PaseoApi`, so archive is the only lifecycle action here.
 
-The sidebar popover lists agents but cannot open them: Paseo 0.12 gives popovers no navigation.
+The sidebar popover lists agents but cannot open them: Paseo gives popovers no navigation.
 Open the monitor and select the agent there.
 
 ## Install
 
-Requires Paseo `^0.12.0`, whose background workspaces the monitor lists. Development uses the 0.12 SDK line from the workspace catalog.
+Requires Paseo `^0.13.0`, whose background workspaces the monitor lists. Development uses the 0.13 SDK line from the workspace catalog.
 
 Install the published package on the daemon host:
 
@@ -116,8 +116,8 @@ bun run typecheck
 Release Please maintains the version, changelog, component tag, and GitHub release from
 Conventional Commits in the monorepo.
 
-The project supports Paseo `^0.12.0` and pins `@getpaseo/plugin`, `@getpaseo/client`,
-`@getpaseo/protocol`, and `@getpaseo/cli` to the 0.12 SDK line through the workspace catalog. Renovate groups `@getpaseo/*`
+The project supports Paseo `^0.13.0` and pins `@getpaseo/plugin`, `@getpaseo/client`,
+`@getpaseo/protocol`, and `@getpaseo/cli` to the 0.13 SDK line through the workspace catalog. Renovate groups `@getpaseo/*`
 updates so the SDKs move together.
 
 React `19.1` and React Native `0.81` intentionally match the versions supplied by Paseo.

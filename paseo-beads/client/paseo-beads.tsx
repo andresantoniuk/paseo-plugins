@@ -2,9 +2,10 @@ import {
   type PluginScreenProps,
   type PluginWorkspacePanelProps,
   useRpc,
+  useTabState,
   useWorkspace,
 } from "@getpaseo/plugin/client";
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { Icon, Markdown } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -35,15 +36,18 @@ import {
   type BeadLane,
   type BeadSection,
   type BeadsFilter,
+  beadsPanelStateSchema,
   beadsSnapshotQueryKey,
   buildBeadSections,
   buildBeadsView,
+  DEFAULT_BEADS_PANEL_STATE,
   issueAccessibilityLabel,
   parseBeadScreenParams,
 } from "./beads-view";
 import { focusWebElement } from "./web";
 
 const REFRESH_INTERVAL_MS = 10_000;
+const SEARCH_PERSIST_DELAY_MS = 300;
 const BACK_BUTTON_NATIVE_ID = "paseo-beads-back";
 const ISSUE_ROW_NATIVE_ID_PREFIX = "paseo-beads-issue-";
 export const ID_FONT_FAMILY = Platform.select({ ios: "Menlo", default: "monospace" });
@@ -169,9 +173,11 @@ function TextSection({
   return (
     <View style={styles.detailSection}>
       <Text style={styles.sectionTitle}>{title}</Text>
-      <Text selectable style={content?.trim() ? styles.sectionCopy : styles.sectionEmpty}>
-        {content?.trim() || "Not provided."}
-      </Text>
+      {content?.trim() ? (
+        <Markdown>{content}</Markdown>
+      ) : (
+        <Text style={styles.sectionEmpty}>Not provided.</Text>
+      )}
     </View>
   );
 }
@@ -480,14 +486,29 @@ export function BeadScreen({ theme, layout, host, params }: PluginScreenProps) {
   );
 }
 
-function WorkspaceBeads({ theme, layout, host, workspaceId }: PluginWorkspacePanelProps) {
+function WorkspaceBeads({ theme, layout, host, workspaceId, tab }: PluginWorkspacePanelProps) {
   const styles = useMemo(() => createStyles(theme, layout.compact), [layout.compact, theme]);
   const workspaceTitle = useWorkspace(workspaceId, ({ name, title }) => title?.trim() || name);
   const loadSnapshot = useRpc(getWorkspaceBeads);
   const loadDetail = useRpc(getWorkspaceBead);
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<BeadsFilter>("all");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [panelState, setPanelState] = useTabState(
+    tab,
+    beadsPanelStateSchema,
+    DEFAULT_BEADS_PANEL_STATE,
+  );
+  const { filter, selectedId } = panelState;
+  // The input edits a local draft; only the settled text is written to the persisted tab state.
+  const [search, setSearch] = useState(panelState.search);
+  useEffect(() => {
+    if (search === panelState.search) return;
+    const timer = setTimeout(
+      () => setPanelState({ ...panelState, search }),
+      SEARCH_PERSIST_DELAY_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [search, panelState, setPanelState]);
+  const setFilter = (next: BeadsFilter) => setPanelState({ ...panelState, filter: next });
+  const setSelectedId = (next: string | null) => setPanelState({ ...panelState, selectedId: next });
   const detailFocusRef = useRef<View | null>(null);
   const issueRowRefs = useRef(new Map<string, View>());
   const originatingIssueIdRef = useRef<string | null>(null);

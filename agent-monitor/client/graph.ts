@@ -132,11 +132,12 @@ function mergeEdge(
 export function buildGraph(
   entries: readonly AgentEntry[],
   interactions: InteractionData | undefined,
+  hostId: string,
   options: GraphOptions = {},
 ): GraphLayout {
   const nodes: GraphNode[] = entries.map((entry) => {
     const childAgents = entries.filter(
-      (candidate) => parentAgentId(candidate.agent) === entry.agent.id,
+      (candidate) => parentAgentId(candidate.agent, hostId) === entry.agent.id,
     ).length;
     return {
       id: entry.agent.id,
@@ -148,7 +149,7 @@ export function buildGraph(
       colorKey: placement(entry),
       messageCount: interactions?.messagesByAgent.get(entry.agent.id) ?? 0,
       childCount: childAgents,
-      parentId: parentAgentId(entry.agent),
+      parentId: parentAgentId(entry.agent, hostId),
       agentId: entry.agent.id,
       entry,
       x: 0,
@@ -266,10 +267,7 @@ export function buildGraph(
     NODE_WIDTH + GRAPH_PADDING * 2,
     ...clusterSummaries.map((cluster) => cluster.x + cluster.width + GRAPH_PADDING),
   );
-  const height = Math.max(
-    NODE_HEIGHT + GRAPH_PADDING * 2,
-    cursorY + shelfHeight + GRAPH_PADDING,
-  );
+  const height = Math.max(NODE_HEIGHT + GRAPH_PADDING * 2, cursorY + shelfHeight + GRAPH_PADDING);
 
   const finalEdges = [...edgeMap.values()].filter(
     (edge) => byId.has(edge.from) && byId.has(edge.to),

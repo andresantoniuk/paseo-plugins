@@ -11,7 +11,7 @@ type PaseoApi = ReturnType<typeof usePaseo>;
 
 type TimelineItem = {
   type?: string;
-  agentMessage?: { sender?: { id?: string } };
+  agentMessage?: { sender?: { id?: string; serverId?: string } };
   detail?: unknown;
   [key: string]: unknown;
 };
@@ -25,18 +25,11 @@ function sessionIdOf(entry: AgentEntry): string | null {
 
 function targetFromDetail(
   detail: unknown,
-  agentIds: ReadonlySet<string>,
   sessionToAgent: ReadonlyMap<string, string>,
 ): string | null {
   if (!detail || typeof detail !== "object") return null;
-  const record = detail as Record<string, unknown>;
-  for (const key of ["agentId", "childAgentId", "targetAgentId", "parentAgentId"]) {
-    const value = record[key];
-    if (typeof value === "string" && agentIds.has(value)) return value;
-  }
-  const childSessionId = record.childSessionId;
-  if (typeof childSessionId === "string") return sessionToAgent.get(childSessionId) ?? null;
-  return null;
+  const childSessionId = (detail as Record<string, unknown>).childSessionId;
+  return typeof childSessionId === "string" ? (sessionToAgent.get(childSessionId) ?? null) : null;
 }
 
 /**
@@ -48,11 +41,12 @@ function targetFromDetail(
  *  - a tool-call detail carrying an agent id or a child session id means the
  *    owner dispatched that agent.
  *
- * It is deliberately bounded: the newest 60 agents and 80 timeline entries
+ * It is deliberately bounded: the newest 60 agents and 200 timeline entries
  * each. A closed agent with no readable timeline contributes no edges.
  */
 export async function fetchInteractions(
   paseo: PaseoApi,
+  hostId: string,
   entries: readonly AgentEntry[],
 ): Promise<InteractionData> {
   const selected = [...entries]
@@ -64,7 +58,6 @@ export async function fetchInteractions(
     })
     .slice(0, MAX_AGENTS);
 
-  const agentIds = new Set(entries.map((entry) => entry.agent.id));
   const sessionToAgent = new Map<string, string>();
   for (const entry of entries) {
     const sessionId = sessionIdOf(entry);
@@ -105,10 +98,7 @@ export async function fetchInteractions(
             const item = row.item as TimelineItem;
             if (!item) continue;
             if (item.type === "user_message" || item.type === "assistant_message") {
-              messagesByAgent.set(
-                entry.agent.id,
-                (messagesByAgent.get(entry.agent.id) ?? 0) + 1,
-              );
+              messagesByAgent.set(entry.agent.id, (messagesByAgent.get(entry.agent.id) ?? 0) + 1);
             }
             if (item.type !== "tool_call") continue;
 
@@ -127,11 +117,16 @@ export async function fetchInteractions(
               );
             }
 
-            const sender = item.agentMessage?.sender?.id;
-            if (sender && sender !== entry.agent.id) {
-              addEdge(sender, entry.agent.id, 1, "message");
+            const sender = item.agentMessage?.sender;
+            // A sender on another host is not a node here; its id only means something there.
+            if (
+              sender?.id &&
+              sender.id !== entry.agent.id &&
+              (!sender.serverId || sender.serverId === hostId)
+            ) {
+              addEdge(sender.id, entry.agent.id, 1, "message");
             }
-            const target = targetFromDetail(detail, agentIds, sessionToAgent);
+            const target = targetFromDetail(detail, sessionToAgent);
             if (target) addEdge(entry.agent.id, target, 1, "tree");
           }
         } catch {
@@ -162,7 +157,7 @@ export function useInteractionGraph(
     .join(",");
   return useQuery({
     queryKey: ["agent-monitor", "interactions", hostId, ids],
-    queryFn: () => fetchInteractions(paseo, entries),
+    queryFn: () => fetchInteractions(paseo, hostId, entries),
     enabled: enabled && entries.length > 0,
     staleTime: 20_000,
   });
