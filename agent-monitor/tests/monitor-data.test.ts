@@ -160,10 +160,7 @@ describe("useAllHostsMonitor", () => {
 
     expect(data.hosts.map((host) => host.label)).toEqual(["alpha", "beta"]);
     expect(data.entries.map((entry) => entry.id).sort()).toEqual(["alpha-entry", "beta-entry"]);
-    expect(data.entries.map((entry) => entry.hostScope?.label).sort()).toEqual([
-      "alpha",
-      "beta",
-    ]);
+    expect(data.entries.map((entry) => entry.hostScope?.label).sort()).toEqual(["alpha", "beta"]);
     expect(data.truncated).toBe(false);
     expect(data.directory.workspaces.get("w1")).toMatchObject({
       name: "main",

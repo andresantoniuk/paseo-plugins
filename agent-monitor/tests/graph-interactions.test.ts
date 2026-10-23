@@ -1,11 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
-import type { AgentEntry, HostScope } from "../client/monitor";
-import { withHostScope } from "../client/monitor";
 import {
   fetchInteractions,
   mergeHostInteractions,
   useAllHostsInteractionGraph,
 } from "../client/graph-data";
+import type { AgentEntry, HostScope } from "../client/monitor";
+import { withHostScope } from "../client/monitor";
 
 const hooks = vi.hoisted(() => ({
   clients: {} as Record<string, unknown>,
@@ -29,8 +29,6 @@ vi.mock("react", () => ({
   useMemo: (factory: () => unknown) => factory(),
 }));
 
-type TimelineRow = { item: unknown };
-
 function timelineClient(timelines: Record<string, unknown[] | Error>) {
   return {
     agents: {
@@ -47,10 +45,7 @@ function timelineClient(timelines: Record<string, unknown[] | Error>) {
   };
 }
 
-function agentEntry(
-  id: string,
-  overrides: Partial<AgentEntry["agent"]> = {},
-): AgentEntry {
+function agentEntry(id: string, overrides: Partial<AgentEntry["agent"]> = {}): AgentEntry {
   return {
     agent: {
       id,
@@ -100,12 +95,12 @@ describe("fetchInteractions", () => {
     const data = await fetchInteractions(client as never, [
       agentEntry("parent"),
       agentEntry("child", { persistence: { provider: "test", sessionId: "session-child" } }),
-      agentEntry("runtime-child", { runtimeInfo: { provider: "test", sessionId: "session-runtime" } }),
+      agentEntry("runtime-child", {
+        runtimeInfo: { provider: "test", sessionId: "session-runtime" },
+      }),
     ]);
 
-    expect(data.edges).toEqual([
-      { from: "parent", to: "child", count: 2, kind: "tree" },
-    ]);
+    expect(data.edges).toEqual([{ from: "parent", to: "child", count: 2, kind: "tree" }]);
   });
 
   test("collects subagent dispatches with label fallbacks", async () => {
