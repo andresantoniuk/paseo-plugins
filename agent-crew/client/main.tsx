@@ -1,12 +1,10 @@
-import { type PluginWorkspacePanelProps, usePaseo, useWorkspace } from "@getpaseo/plugin/client";
 import {
-  FlatList,
-  Icon,
-  Modal,
-  ScrollView,
-  TextInput,
-  useToast,
-} from "@getpaseo/plugin/client/react-native";
+  type PluginWorkspacePanelProps,
+  usePaseo,
+  useTabState,
+  useWorkspace,
+} from "@getpaseo/plugin/client";
+import { FlatList, Icon, Modal, ScrollView, TextInput, useToast } from "@getpaseo/plugin/client/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { type ListRenderItemInfo, Pressable, StyleSheet, Text, View } from "react-native";
@@ -31,12 +29,14 @@ import {
   parentAgentId,
   sendOptions,
 } from "./crew";
+import { DEFAULT_PANEL_STATE, panelStateSchema } from "./panel-state";
 
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 10;
 const REFRESH_DEBOUNCE_MS = 500;
 const BACKSTOP_REFRESH_MS = 30_000;
 const CLOCK_INTERVAL_MS = 15_000;
+const QUERY_PERSIST_DELAY_MS = 300;
 
 type CrewData = {
   entries: AgentEntry[];
@@ -217,20 +217,32 @@ export function AgentCrew({
   host,
   workspaceId,
   navigation,
+  tab,
 }: PluginWorkspacePanelProps) {
   const paseo = usePaseo();
   const toast = useToast();
   const workspaceTitle = useWorkspace(workspaceId, ({ name, title }) => title?.trim() || name);
   const { data, error, isPending, isFetching, refetch } = useCrewDirectory(host.id);
 
-  const [selectedState, setSelectedState] = useState<CrewState | null>(null);
-  const [query, setQuery] = useState("");
+  const [panelState, setPanelState] = useTabState(tab, panelStateSchema, DEFAULT_PANEL_STATE);
+  const { state: selectedState } = panelState;
+  const collapsedAgentIds = useMemo(
+    () => new Set(panelState.collapsedAgentIds),
+    [panelState.collapsedAgentIds],
+  );
+  const setSelectedState = (state: CrewState | null) => setPanelState({ ...panelState, state });
+  // The input edits a local draft; only the settled text is written to the persisted tab state.
+  const [query, setQuery] = useState(panelState.query);
+  useEffect(() => {
+    if (query === panelState.query) return;
+    const timer = setTimeout(() => setPanelState({ ...panelState, query }), QUERY_PERSIST_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [query, panelState, setPanelState]);
   const [now, setNow] = useState(() => Date.now());
   const [dialog, setDialog] = useState<DialogState>(null);
   const [permissionDialog, setPermissionDialog] = useState<PermissionDialogState>(null);
   const [message, setMessage] = useState("");
   const [delivery, setDelivery] = useState<DeliveryChoice>("interrupt");
-  const [collapsedAgentIds, setCollapsedAgentIds] = useState<ReadonlySet<string>>(() => new Set());
 
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), CLOCK_INTERVAL_MS);
@@ -581,12 +593,10 @@ export function AgentCrew({
   }
 
   function toggleCollapsed(agentId: string) {
-    setCollapsedAgentIds((current) => {
-      const next = new Set(current);
-      if (next.has(agentId)) next.delete(agentId);
-      else next.add(agentId);
-      return next;
-    });
+    const next = new Set(collapsedAgentIds);
+    if (next.has(agentId)) next.delete(agentId);
+    else next.add(agentId);
+    setPanelState({ ...panelState, collapsedAgentIds: [...next] });
   }
 
   function openPermissionDialog(node: CrewNode, request: PermissionRequest) {
