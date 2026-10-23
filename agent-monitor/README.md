@@ -94,7 +94,7 @@ the graph never opens a separate connection of its own.
 When the client connects to more than one host, the monitor merges every online host into one
 screen. The header counts agents across hosts, host chips filter the roster, rows show their host
 in compact placement lines, and project groups merge by base name so one project reads as one
-group (a per-host display suffix such as `FINTERLACE · mac` does not split the group). The graph
+group (a per-host display suffix such as `ACME · alpha` does not split the group). The graph
 adds a host filter row, shows the host in node details, and opens agents and workspaces on their
 own host through the navigation `serverId`. Timeline sweeps run per host and merge, and archive
 fans out to the owning host of each agent. A host that fails to load is named in a warning while
@@ -136,8 +136,8 @@ What stays per installation:
   daemon) and keep both clones on the same commit. A stale bundle renders with old behavior, and
   the only symptom is the surface behaving differently per selected host.
 
-The Mac daemon ships with plugins off; enable once with `"pluginsEnabled": true` in
-`~/.paseo/config.json` followed by `paseo reload` (the install itself is picked up without a
+A daemon with plugins disabled rejects plugin calls; enable once with `"pluginsEnabled": true`
+in its `config.json` followed by `paseo reload` (the install itself is picked up without a
 restart). Removing one side later is `paseo plugin remove agent-monitor` on that host.
 
 ## Develop

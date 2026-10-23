@@ -480,7 +480,7 @@ export function buildRoster(
 
 /**
  * The cross-host project name: registry display names may carry a per-host
- * suffix ("FINTERLACE · mac") because the core sidebar cannot unify non-git
+ * suffix ("ACME · alpha") because the core sidebar cannot unify non-git
  * projects. The monitor groups by the base name so one project reads as one
  * group however many hosts list it.
  */
