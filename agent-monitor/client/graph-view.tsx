@@ -570,7 +570,7 @@ export function AgentGraph({
                     position: "absolute",
                     left: 12,
                     top: 8,
-                    color,
+                    color: theme.colors.foregroundMuted,
                     fontSize: 11,
                     fontWeight: "700",
                   }}
@@ -613,7 +613,7 @@ export function AgentGraph({
                 ? theme.colors.accent
                 : edge.kind === "subagent"
                   ? theme.colors.statusWarning
-                  : theme.colors.border;
+                  : theme.colors.foregroundMuted;
             const hitHeight = Math.max(12, thickness);
             return (
               <Pressable
