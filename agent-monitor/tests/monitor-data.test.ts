@@ -141,13 +141,13 @@ describe("useAllHostsMonitor", () => {
   }
 
   test("merges every online host and observes each one", async () => {
-    const mac = connect("mac-entry");
-    const desk = connect("desk-entry");
-    hooks.clients = { "srv-mac": mac, "srv-desk": desk };
+    const hostA = connect("alpha-entry");
+    const hostB = connect("beta-entry");
+    hooks.clients = { "srv-a": hostA, "srv-b": hostB };
     hooks.hosts = [
-      { serverId: "srv-mac", label: "antomac", status: "online" },
+      { serverId: "srv-a", label: "alpha", status: "online" },
       { serverId: "srv-off", label: "offline", status: "offline" },
-      { serverId: "srv-desk", label: "antodesk", status: "online" },
+      { serverId: "srv-b", label: "beta", status: "online" },
     ];
 
     useAllHostsMonitor();
@@ -158,11 +158,11 @@ describe("useAllHostsMonitor", () => {
       truncated: boolean;
     };
 
-    expect(data.hosts.map((host) => host.label)).toEqual(["antodesk", "antomac"]);
-    expect(data.entries.map((entry) => entry.id).sort()).toEqual(["desk-entry", "mac-entry"]);
+    expect(data.hosts.map((host) => host.label)).toEqual(["alpha", "beta"]);
+    expect(data.entries.map((entry) => entry.id).sort()).toEqual(["alpha-entry", "beta-entry"]);
     expect(data.entries.map((entry) => entry.hostScope?.label).sort()).toEqual([
-      "antodesk",
-      "antomac",
+      "alpha",
+      "beta",
     ]);
     expect(data.truncated).toBe(false);
     expect(data.directory.workspaces.get("w1")).toMatchObject({
@@ -175,7 +175,7 @@ describe("useAllHostsMonitor", () => {
 
     const cleanups = hooks.effects.map((effect) => effect()).filter(Boolean);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    for (const client of [mac, desk]) {
+    for (const client of [hostA, hostB]) {
       expect(client.agents.list).toHaveBeenCalledWith({ subscribe: {}, includeBackground: true });
       expect(client.workspaces.list).toHaveBeenCalledWith({
         subscribe: {},

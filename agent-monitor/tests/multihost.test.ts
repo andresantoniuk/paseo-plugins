@@ -20,8 +20,8 @@ import {
 } from "../client/monitor";
 import { mergeHostDirectories } from "../client/monitor-data";
 
-const ANTODESK: HostScope = { serverId: "srv-antodesk", label: "antodesk" };
-const MAC: HostScope = { serverId: "srv-macomac", label: "antomac" };
+const HOST_BETA: HostScope = { serverId: "srv-beta", label: "beta" };
+const HOST_ALPHA: HostScope = { serverId: "srv-alpha", label: "alpha" };
 const OPTIONS: GroupOptions = { floatPinned: false, agentSort: "title" };
 
 type AgentOverrides = Partial<AgentEntry["agent"]>;
@@ -95,13 +95,13 @@ function interactions(overrides: Partial<InteractionData> = {}): InteractionData
 describe("host scope", () => {
   test("tags entries and reads the scope back", () => {
     expect(hostOf(entry())).toBeUndefined();
-    const scoped = withHostScope(entry(), ANTODESK);
-    expect(hostOf(scoped)).toEqual(ANTODESK);
+    const scoped = withHostScope(entry(), HOST_BETA);
+    expect(hostOf(scoped)).toEqual(HOST_BETA);
   });
 
   test("search matches the host label", () => {
-    expect(matches(withHostScope(entry(), ANTODESK), "antodesk")).toBe(true);
-    expect(matches(withHostScope(entry(), ANTODESK), "antomac")).toBe(false);
+    expect(matches(withHostScope(entry(), HOST_BETA), "beta")).toBe(true);
+    expect(matches(withHostScope(entry(), HOST_BETA), "alpha")).toBe(false);
   });
 });
 
@@ -111,20 +111,20 @@ describe("attention quick access", () => {
     const items = attentionItems([
       withHostScope(
         entry({ id: "a", requiresAttention: true, provider: "claude", model: "opus" }),
-        ANTODESK,
+        HOST_BETA,
       ),
     ]);
     expect(items).toHaveLength(1);
-    expect(items[0].host?.label).toBe("antodesk");
+    expect(items[0].host?.label).toBe("beta");
     expect(items[0].detail).toBe("claude · opus");
   });
 });
 
 describe("layout panels", () => {
   test("initial cluster panels never overlap, however many hosts share a project", () => {
-    const projects = ["FINTERLACE", "fluxcow", "FLUXRIG", "infra", "intel", "knowledge", "QUINCE"];
+    const projects = ["ACME", "beacon", "CASTOR", "drift", "ember", "flux", "GRAIN"];
     const scoped = projects.flatMap((project) =>
-      [MAC, ANTODESK].map((host, hostIndex) =>
+      [HOST_ALPHA, HOST_BETA].map((host, hostIndex) =>
         withHostScope(
           entry(
             { id: `${project}-${hostIndex}`, workspaceId: `ws-${project}-${hostIndex}` },
@@ -134,15 +134,15 @@ describe("layout panels", () => {
         ),
       ),
     );
-    // A couple of crowded panels, like production.
+    // A couple of crowded panels, with several crowded panels.
     for (let i = 0; i < 6; i += 1) {
       scoped.push(
         withHostScope(
           entry(
-            { id: `fluxrig-extra-${i}`, workspaceId: `ws-fluxrig-extra-${i}` },
-            { projectKey: "fluxrig", projectName: "FLUXRIG", workspaceName: "general" },
+            { id: `castor-extra-${i}`, workspaceId: `ws-castor-extra-${i}` },
+            { projectKey: "castor", projectName: "CASTOR", workspaceName: "general" },
           ),
-          ANTODESK,
+          HOST_BETA,
         ),
       );
     }
@@ -167,10 +167,10 @@ describe("layout panels", () => {
     const crowded = Array.from({ length: 6 }, (_, index) =>
       withHostScope(
         entry(
-          { id: `flux-${index}`, workspaceId: `ws-flux-${index}` },
-          { projectKey: "fluxrig", projectName: "FLUXRIG", workspaceName: "general" },
+          { id: `castor-${index}`, workspaceId: `ws-castor-${index}` },
+          { projectKey: "castor", projectName: "CASTOR", workspaceName: "general" },
         ),
-        ANTODESK,
+        HOST_BETA,
       ),
     );
     const layout = buildGraph(crowded, {
@@ -191,15 +191,15 @@ describe("layout panels", () => {
   });
 
   test("cluster boxes do not overlap in the initial layout", () => {
-    const projects = ["FINTERLACE", "fluxcow", "FLUXRIG", "infra", "intel", "knowledge", "QUINCE"];
+    const projects = ["ACME", "beacon", "CASTOR", "drift", "ember", "flux", "GRAIN"];
     const scoped = projects.flatMap((project) =>
-      Array.from({ length: project === "FLUXRIG" ? 7 : 1 }, (_, index) =>
+      Array.from({ length: project === "CASTOR" ? 7 : 1 }, (_, index) =>
         withHostScope(
           entry(
             { id: `${project}-${index}`, workspaceId: `ws-${project}-${index}` },
             { projectKey: project.toLowerCase(), projectName: project, workspaceName: "general" },
           ),
-          ANTODESK,
+          HOST_BETA,
         ),
       ),
     );
@@ -247,15 +247,15 @@ describe("focus request", () => {
 
 describe("hostColor", () => {
   test("is stable per server and comes from the shared palette", () => {
-    expect(hostColor(ANTODESK)).toBe(hostColor(ANTODESK));
-    expect(HOST_PALETTE).toContain(hostColor(ANTODESK));
-    expect(HOST_PALETTE).toContain(hostColor(MAC));
+    expect(hostColor(HOST_BETA)).toBe(hostColor(HOST_BETA));
+    expect(HOST_PALETTE).toContain(hostColor(HOST_BETA));
+    expect(HOST_PALETTE).toContain(hostColor(HOST_ALPHA));
   });
 });
 
 describe("baseProjectName", () => {
   test("strips a per-host suffix", () => {
-    expect(baseProjectName("FINTERLACE · mac")).toBe("FINTERLACE");
+    expect(baseProjectName("ACME · alpha")).toBe("ACME");
   });
 
   test("keeps plain names", () => {
@@ -265,26 +265,26 @@ describe("baseProjectName", () => {
 
 describe("mergeHostDirectories", () => {
   test("tags entries per host and merges directories", () => {
-    const macEntry = entry({ id: "mac-1", workspaceId: "ws-mac" });
-    const deskEntry = entry({ id: "desk-1", workspaceId: "ws-desk" });
+    const alphaEntry = entry({ id: "alpha-1", workspaceId: "ws-alpha" });
+    const deskEntry = entry({ id: "beta-1", workspaceId: "ws-beta" });
     const merged = mergeHostDirectories([
       {
-        host: MAC,
+        host: HOST_ALPHA,
         data: {
-          entries: [macEntry],
+          entries: [alphaEntry],
           directory: {
-            workspaces: new Map([["ws-mac", workspace("ws-mac", "infra", "prj-mac")]]),
+            workspaces: new Map([["ws-alpha", workspace("ws-alpha", "general", "prj-alpha")]]),
             projects: indexProjects([]),
           },
           truncated: false,
         },
       },
       {
-        host: ANTODESK,
+        host: HOST_BETA,
         data: {
           entries: [deskEntry],
           directory: {
-            workspaces: new Map([["ws-desk", workspace("ws-desk", "infra", "prj-desk")]]),
+            workspaces: new Map([["ws-beta", workspace("ws-beta", "general", "prj-beta")]]),
             projects: indexProjects([]),
           },
           truncated: true,
@@ -292,10 +292,10 @@ describe("mergeHostDirectories", () => {
       },
     ]);
 
-    expect(merged.entries.map((item) => item.agent.id)).toEqual(["mac-1", "desk-1"]);
-    expect(hostOf(merged.entries[0])?.serverId).toBe(MAC.serverId);
-    expect(hostOf(merged.entries[1])?.serverId).toBe(ANTODESK.serverId);
-    expect([...merged.directory.workspaces.keys()].sort()).toEqual(["ws-desk", "ws-mac"]);
+    expect(merged.entries.map((item) => item.agent.id)).toEqual(["alpha-1", "beta-1"]);
+    expect(hostOf(merged.entries[0])?.serverId).toBe(HOST_ALPHA.serverId);
+    expect(hostOf(merged.entries[1])?.serverId).toBe(HOST_BETA.serverId);
+    expect([...merged.directory.workspaces.keys()].sort()).toEqual(["ws-alpha", "ws-beta"]);
     expect(merged.truncated).toBe(true);
   });
 });
@@ -332,46 +332,46 @@ describe("mergeProjectGroupsAcrossHosts", () => {
   }
 
   test("merges a renamed project with its base name", () => {
-    const macEntries = [
+    const alphaEntries = [
       withHostScope(
         entry(
-          { id: "mac-1", workspaceId: "ws-mac" },
-          { projectKey: "finterlace", projectName: "FINTERLACE · mac", workspaceName: "general" },
+          { id: "alpha-1", workspaceId: "ws-alpha" },
+          { projectKey: "acme", projectName: "ACME · alpha", workspaceName: "general" },
         ),
-        MAC,
+        HOST_ALPHA,
       ),
     ];
-    const deskEntries = [
+    const betaEntries = [
       withHostScope(
         entry(
-          { id: "desk-1", workspaceId: "ws-desk" },
-          { projectKey: "finterlace", projectName: "FINTERLACE", workspaceName: "general" },
+          { id: "beta-1", workspaceId: "ws-beta" },
+          { projectKey: "acme", projectName: "ACME", workspaceName: "general" },
         ),
-        ANTODESK,
+        HOST_BETA,
       ),
     ];
     const merged = mergeProjectGroupsAcrossHosts([
       {
-        host: MAC,
-        projects: groupByProject(macEntries, directoryFor("prj-mac", "FINTERLACE · mac"), OPTIONS),
+        host: HOST_ALPHA,
+        projects: groupByProject(alphaEntries, directoryFor("prj-alpha", "ACME · alpha"), OPTIONS),
       },
       {
-        host: ANTODESK,
-        projects: groupByProject(deskEntries, directoryFor("prj-desk", "FINTERLACE"), OPTIONS),
+        host: HOST_BETA,
+        projects: groupByProject(betaEntries, directoryFor("prj-beta", "ACME"), OPTIONS),
       },
     ]);
 
     expect(merged).toHaveLength(1);
-    expect(merged[0].name).toBe("FINTERLACE");
+    expect(merged[0].name).toBe("ACME");
     expect(
       merged[0].workspaces.flatMap((group) => group.entries.map((item) => item.agent.id)).sort(),
-    ).toEqual(["desk-1", "mac-1"]);
+    ).toEqual(["alpha-1", "beta-1"]);
   });
 
   test("keeps distinct projects apart and sorts by name", () => {
     const merged = mergeProjectGroupsAcrossHosts([
       {
-        host: MAC,
+        host: HOST_ALPHA,
         projects: groupByProject(
           [entry({ id: "m1", workspaceId: "ws-infra" }, { projectName: "infra" })],
           {
@@ -382,7 +382,7 @@ describe("mergeProjectGroupsAcrossHosts", () => {
         ),
       },
       {
-        host: ANTODESK,
+        host: HOST_BETA,
         projects: groupByProject(
           [entry({ id: "d1", workspaceId: "ws-intel" }, { projectName: "intel" })],
           {
@@ -403,12 +403,12 @@ describe("multi-host graph", () => {
     const layout = buildGraph(
       [
         withHostScope(
-          entry({ id: "mac-1" }, { projectName: "FINTERLACE · mac", workspaceName: "general" }),
-          MAC,
+          entry({ id: "alpha-1" }, { projectName: "ACME · alpha", workspaceName: "general" }),
+          HOST_ALPHA,
         ),
         withHostScope(
-          entry({ id: "desk-1" }, { projectName: "FINTERLACE", workspaceName: "general" }),
-          ANTODESK,
+          entry({ id: "beta-1" }, { projectName: "ACME", workspaceName: "general" }),
+          HOST_BETA,
         ),
       ],
       interactions(),
@@ -417,9 +417,9 @@ describe("multi-host graph", () => {
     expect(layout.nodes).toHaveLength(2);
     expect(new Set(layout.nodes.map((node) => node.colorKey)).size).toBe(1);
     expect(layout.clusters).toHaveLength(1);
-    expect(layout.clusters[0].name).toBe("FINTERLACE / general");
+    expect(layout.clusters[0].name).toBe("ACME / general");
     const byId = new Map(layout.nodes.map((node) => [node.id, node]));
-    expect(byId.get("mac-1")?.host?.label).toBe("antomac");
-    expect(byId.get("desk-1")?.host?.label).toBe("antodesk");
+    expect(byId.get("alpha-1")?.host?.label).toBe("alpha");
+    expect(byId.get("beta-1")?.host?.label).toBe("beta");
   });
 });
