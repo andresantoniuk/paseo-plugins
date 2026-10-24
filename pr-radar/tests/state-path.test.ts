@@ -5,7 +5,15 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { acknowledgeViewerUpdates, resolveViewerScope } from "../server/viewer-scope";
 
 type GhHandler = (args: string[]) => string;
-const gh = vi.hoisted(() => ({ handler: undefined as GhHandler | undefined }));
+const gh = vi.hoisted(() => ({
+  handler: undefined as GhHandler | undefined,
+  /** Answer on a later tick so overlapping calls are observable. */
+  defer: false,
+  /** Searches started while this is set fail, even if answered after it is cleared. */
+  failSearches: false,
+  activeSearches: 0,
+  peakSearches: 0,
+}));
 
 vi.mock("node:child_process", () => ({
   execFile: (
@@ -14,11 +22,23 @@ vi.mock("node:child_process", () => ({
     _options: unknown,
     callback: (error: Error | null, result?: { stdout: string }) => void,
   ) => {
-    try {
-      callback(null, { stdout: gh.handler?.(args) ?? "" });
-    } catch (error) {
-      callback(error as Error);
+    const isSearch = args[0] === "search";
+    const failing = isSearch && gh.failSearches;
+    if (isSearch) {
+      gh.activeSearches += 1;
+      gh.peakSearches = Math.max(gh.peakSearches, gh.activeSearches);
     }
+    const respond = () => {
+      if (isSearch) gh.activeSearches -= 1;
+      try {
+        if (failing) throw new Error("rate limited");
+        callback(null, { stdout: gh.handler?.(args) ?? "" });
+      } catch (error) {
+        callback(error as Error);
+      }
+    };
+    if (gh.defer) setTimeout(respond, 5);
+    else respond();
   },
 }));
 
@@ -32,7 +52,11 @@ async function temporaryDirectory(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   gh.handler = undefined;
+  gh.defer = false;
+  gh.failSearches = false;
+  gh.peakSearches = 0;
   vi.unstubAllEnvs();
   await Promise.all(temporaryDirectories.splice(0).map((d) => rm(d, { recursive: true })));
 });
@@ -144,6 +168,26 @@ describe("viewer scope inbox", () => {
     const third = await resolveViewerScope({ urls: [url], windowDays: 30 });
     expect(third.updates).toBe(0);
     expect(third.acknowledgedAt).not.toBeNull();
+  });
+
+  test("runs GitHub searches with bounded concurrency", async () => {
+    vi.stubEnv("PASEO_HOME", await temporaryDirectory());
+    gh.handler = ghFor({ checks: "SUCCESS" });
+    gh.defer = true;
+    const result = await resolveViewerScope({ urls: [], windowDays: 30 });
+    expect(result.error).toBeNull();
+    expect(gh.peakSearches).toBe(2);
+  });
+
+  test("a failed search does not leak a queue slot", async () => {
+    vi.stubEnv("PASEO_HOME", await temporaryDirectory());
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    gh.defer = true;
+    gh.handler = ghFor({ checks: "SUCCESS" });
+    gh.failSearches = true;
+    expect((await resolveViewerScope({ urls: [], windowDays: 7 })).error).toBe("rate limited");
+    gh.failSearches = false;
+    expect((await resolveViewerScope({ urls: [], windowDays: 7 })).error).toBeNull();
   });
 
   test("uses conservative states when GitHub detail requests fail", async () => {
