@@ -57,9 +57,12 @@ function agentState(row: RadarRow): string {
   return `${agent.title} · ${agent.status}${extra}`;
 }
 
+// Below this width (px) the radar uses its compact card layout: actions under the text.
+const NARROW_PANE_WIDTH = 640;
+
 export function PrRadar({
   theme,
-  layout,
+  layout: hostLayout,
   host,
   navigation,
   params = {},
@@ -67,6 +70,10 @@ export function PrRadar({
   const queryClient = useQueryClient();
   const acknowledgeUpdates = useRpc(acknowledgeViewerScope);
   const parsed = parseRadarParams(params);
+  // The host's compact flag follows the window, so a pane narrower than the window (the screen
+  // sits beside a sidebar) kept the wide card. Measure the radar's own width as well.
+  const [narrow, setNarrow] = useState(false);
+  const layout = { ...hostLayout, compact: hostLayout.compact || narrow };
   const [filter, setFilterState] = useState<RadarFilter | null>(parsed.filter);
   const [focusedPr, setFocusedPr] = useState<string | null>(parsed.pr);
   // Chips are local state: openScreen would push a new screen per tap. A chip press also ends PR focus.
@@ -807,7 +814,10 @@ export function PrRadar({
   );
 
   return (
-    <View style={styles.screen}>
+    <View
+      style={styles.screen}
+      onLayout={(event) => setNarrow(event.nativeEvent.layout.width < NARROW_PANE_WIDTH)}
+    >
       <FlatList
         contentContainerStyle={styles.content}
         data={visibleRows}
