@@ -1,4 +1,5 @@
 import { openExternalUrl, type PluginSurfaceProps, useRpc } from "@getpaseo/plugin/client";
+import { copyText } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View } from "react-native";
@@ -84,6 +85,13 @@ export function PrRadar({
   const [now, setNow] = useState(() => Date.now());
   const [openError, setOpenError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  // A fresh object per copy re-arms the reset timer; the effect cleanup cancels it on re-copy and unmount.
+  const [copied, setCopied] = useState<{ id: string } | null>(null);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(null), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
 
   const {
     paseo,
@@ -357,6 +365,7 @@ export function PrRadar({
       },
       warningText: { color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 },
       row: {
+        position: "relative" as const,
         flexDirection: "row" as const,
         marginHorizontal: gutter,
         borderTopWidth: 1,
@@ -370,7 +379,22 @@ export function PrRadar({
         paddingLeft: 12,
         gap: 6,
       },
-      rowTop: { flexDirection: "row" as const, alignItems: "center" as const, gap: 8 },
+      rowTop: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: 8,
+        paddingRight: 80,
+      },
+      copyButton: {
+        position: "absolute" as const,
+        top: 10,
+        right: 0,
+        minHeight: 28,
+        justifyContent: "center" as const,
+        paddingHorizontal: 8,
+        borderRadius: 6,
+      },
+      copyText: { color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "600" as const },
       identifier: {
         color: theme.colors.foregroundMuted,
         fontSize: 11,
@@ -449,6 +473,18 @@ export function PrRadar({
       await openPullRequestUrl(row.url, openExternalUrl);
     } catch {
       setOpenError(`Could not open ${row.repository}#${row.number ?? "PR"}.`);
+    }
+  }, []);
+
+  const copyPrLink = useCallback(async (row: RadarRow) => {
+    setOpenError(null);
+    setCopied(null);
+    try {
+      await copyText(row.url);
+      setOpenError(null);
+      setCopied({ id: row.id });
+    } catch {
+      setOpenError(`Could not copy the link for ${row.repository}#${row.number ?? "PR"}.`);
     }
   }, []);
 
@@ -576,6 +612,16 @@ export function PrRadar({
           {layout.compact ? actions : null}
         </View>
         {layout.compact ? null : actions}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Copy link to pull request ${item.repository} ${item.number ?? ""}`}
+          onPress={() => void copyPrLink(item)}
+          style={({ pressed }) => [styles.copyButton, pressed && styles.refreshPressed]}
+        >
+          <Text style={styles.copyText} accessibilityLiveRegion="polite">
+            {copied?.id === item.id ? "Copied" : "Copy link"}
+          </Text>
+        </Pressable>
       </View>
     );
   };
