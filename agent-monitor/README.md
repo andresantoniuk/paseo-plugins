@@ -12,13 +12,18 @@ https://github.com/user-attachments/assets/3c841799-ed98-4ec4-86a0-a7917e3894fc
 
 ## Screenshots
 
-Agent, project, and workspace names come from an isolated synthetic workspace. Both PNGs were
-captured at 2× pixel density after browser DevTools replaced the local host label and verified that
-no private organization names remained in the rendered page.
+Agent, project, and workspace names come from an isolated synthetic workspace. The roster and
+settings PNGs were captured at 2× pixel density after browser DevTools replaced the local host
+label and verified that no private organization names remained in the rendered page. The graph
+screenshot uses the same synthetic project and agent names.
 
 ### Project-first roster
 
 ![Agent Monitor project-first roster](https://raw.githubusercontent.com/omercnet/paseo-plugins/main/agent-monitor/docs/images/agent-monitor-roster.png)
+
+### Graph view
+
+![Agent Monitor graph view](https://raw.githubusercontent.com/omercnet/paseo-plugins/main/agent-monitor/docs/images/agent-graph.png)
 
 ### Monitor settings
 
@@ -43,6 +48,12 @@ no private organization names remained in the rendered page.
 - Parent rows show their subagent count; child rows use a left indent guide.
 - Agents delegated from another host (`paseo.parent-server-id` names a different host) are listed as top-level rows with a "Delegated from `<host>`" hint. They are never counted under, or indented below, a local agent that happens to share the parent id.
 - Text filter over title, agent id, provider, model, cwd, project, and workspace.
+- **Graph view**: switch the header between Roster and Graph. Agents sit in compact
+  project/workspace panels; provider-native subagents appear as dashed nodes. Edges encode parent
+  hand-offs, timeline message provenance, and subagent dispatches, with thickness scaled by message
+  count. Drag cards, pan the canvas, zoom with the wheel or a trackpad pinch, filter by project,
+  workspace, provider, subagents, or connected-only, and select a card or edge to focus its
+  neighbourhood and dim the rest.
 - Select an agent row to open that agent, or select a workspace header (or its folder button when
   collapsed) to open its workspace through Paseo's cross-platform navigation API.
 - Archive one agent, or sweep every closed agent (two taps).
@@ -69,6 +80,13 @@ backstop refetch. The screen, the sidebar row, and its popover share that query,
 and backstop; on web and desktop, refreshes pause while the window is hidden and catch up when it returns. The plugin
 borrows the selected host's connection; it opens no socket of its own. Agents and workspaces in
 background workspaces are included.
+
+The graph reads timeline tails (200 entries, up to 60 agents, four at a time) to derive message
+and subagent edges. It refreshes every 30 seconds while open in the foreground and when Refresh
+is pressed. Readable closed timelines can contribute interactions; unreadable timelines are
+counted in the graph toolbar. Filters only change the visible graph and do not start new scans.
+The graph uses the selected host's existing connection. Graph filters, selection, and positions
+are temporary; the existing host-scoped monitor settings are unchanged.
 
 ## Limits
 

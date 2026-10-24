@@ -5,6 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, Text, TextInput, View } from "react-native";
 import { initialBucket, type MonitorSettings, monitorSettings } from "../shared/monitor-settings";
 import { DiffStat, type DiffStatStyles } from "./diff-stat";
+import { useInteractionGraph } from "./graph-data";
+import { AgentGraph } from "./graph-view";
 import {
   type AgentEntry,
   age,
@@ -159,6 +161,7 @@ function AgentMonitorRoster({
   const [now, setNow] = useState(() => Date.now());
   const [sweepArmed, setSweepArmed] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(() => new Set());
+  const [view, setView] = useState<"roster" | "graph">("roster");
 
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), CLOCK_INTERVAL_MS);
@@ -186,9 +189,9 @@ function AgentMonitorRoster({
       entries.filter((entry) => bucketOf(entry.agent) === "closed").map((entry) => entry.agent.id),
     [entries],
   );
-  const roster = useMemo(() => {
+  const visibleEntries = useMemo(() => {
     const search = needle.trim().toLowerCase();
-    const filtered = entries.filter((entry) => {
+    return entries.filter((entry) => {
       const bucket = bucketOf(entry.agent);
       if (selected !== null) {
         if (bucket !== selected) return false;
@@ -197,8 +200,18 @@ function AgentMonitorRoster({
       }
       return matches(entry, search);
     });
-    return buildRoster(filtered, directory, settings, host.id);
-  }, [directory, entries, host.id, needle, selected, settings]);
+  }, [entries, needle, selected, settings]);
+  const roster = useMemo(
+    () => buildRoster(visibleEntries, directory, settings, host.id),
+    [directory, host.id, settings, visibleEntries],
+  );
+  // Full roster, not visibleEntries: the graph reads timelines and must not rescan per keystroke.
+  const interactions = useInteractionGraph(host.id, entries, view === "graph");
+  const refetchInteractions = interactions.refetch;
+  const refresh = useCallback(() => {
+    void refetch();
+    if (view === "graph" && entries.length > 0) void refetchInteractions();
+  }, [entries.length, refetch, refetchInteractions, view]);
 
   const styles = useMemo(() => {
     const gutter = layout.compact ? 12 : 20;
@@ -220,6 +233,21 @@ function AgentMonitorRoster({
       screen: { flex: 1, backgroundColor: theme.colors.surface0 },
       header: { paddingHorizontal: gutter, paddingTop: gutter, gap: 10 },
       summaryLine: { ...rowAlign, gap: 8 },
+      viewToggle: {
+        flexDirection: "row" as const,
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: border,
+        overflow: "hidden" as const,
+      },
+      viewToggleItem: { paddingHorizontal: 8, paddingVertical: 4 },
+      viewToggleItemOn: {
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        backgroundColor: theme.colors.accent,
+      },
+      viewToggleText: { color: muted, fontSize: 11 },
+      viewToggleTextOn: { color: theme.colors.accentForeground, fontSize: 11 },
       summary: { flex: 1, color: muted, fontSize: 13 },
       syncing: { color: muted, fontSize: 11, opacity: 0.8 },
       syncingHidden: { opacity: 0 },
@@ -653,7 +681,7 @@ function AgentMonitorRoster({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Refresh agents"
-            onPress={() => void refetch()}
+            onPress={refresh}
             style={styles.refreshAction}
           >
             <Text style={styles.actionText}>Refresh</Text>
@@ -668,6 +696,28 @@ function AgentMonitorRoster({
           </Pressable>
         </View>
         <View style={styles.chips}>
+          <View style={styles.viewToggle}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Show roster view"
+              onPress={() => setView("roster")}
+              style={view === "roster" ? styles.viewToggleItemOn : styles.viewToggleItem}
+            >
+              <Text style={view === "roster" ? styles.viewToggleTextOn : styles.viewToggleText}>
+                Roster
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Show graph view"
+              onPress={() => setView("graph")}
+              style={view === "graph" ? styles.viewToggleItemOn : styles.viewToggleItem}
+            >
+              <Text style={view === "graph" ? styles.viewToggleTextOn : styles.viewToggleText}>
+                Graph
+              </Text>
+            </Pressable>
+          </View>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Show all agents"
@@ -728,7 +778,17 @@ function AgentMonitorRoster({
       </View>
       {error ? <Text style={styles.error}>{error.message}</Text> : null}
       {archive.error ? <Text style={styles.error}>{archive.error.message}</Text> : null}
-      {roster.kind === "compact" ? (
+      {view === "graph" ? (
+        <AgentGraph
+          hostId={host.id}
+          entries={visibleEntries}
+          interactions={interactions.data}
+          loading={interactions.isPending}
+          theme={theme}
+          navigation={navigation}
+          compact={layout.compact}
+        />
+      ) : roster.kind === "compact" ? (
         <FlatList
           data={roster.entries}
           keyExtractor={(entry) => entry.agent.id}
