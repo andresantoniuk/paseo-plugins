@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { credentialSummaries } from "../server/credentials";
+import { credentialSummaries, sandboxEnvironment } from "../server/credentials";
+import type { SandboxRecord, State } from "../server/store";
 import {
   type CredentialSummary,
   credentialNameSchema,
@@ -61,5 +62,65 @@ describe("credential summaries", () => {
     expect(at("2026-12-10T00:00:00.000Z")).toContain("Expires in 22 days");
     expect(at("2027-01-02T00:00:00.000Z")).toMatch(/^Expired\./);
     expect(credentialNotice(undefined).hint).toBe("Not set");
+  });
+});
+
+describe("sandbox environment", () => {
+  const sandbox: SandboxRecord = {
+    id: "a",
+    name: "n",
+    repoUrl: "https://github.com/a/b",
+    handle: null,
+    revision: null,
+    password: "pw",
+    createdAt: "2026-01-01",
+  };
+  const state = (hostLogins: string[]): State => ({
+    credentials: {},
+    hostLogins,
+    sandboxes: { a: sandbox },
+  });
+
+  test("sharing a login changes the revision, so running sandboxes ask for a restart", () => {
+    const off = sandboxEnvironment(state([]), sandbox);
+    const on = sandboxEnvironment(state(["codex"]), sandbox);
+    expect(on.hostLogins).toEqual(["codex"]);
+    expect(on.revision).not.toBe(off.revision);
+  });
+
+  test("the order logins were switched on in does not matter, and unknown ids are ignored", () => {
+    const first = sandboxEnvironment(state(["opencode", "claude", "gone"]), sandbox);
+    const second = sandboxEnvironment(state(["claude", "opencode"]), sandbox);
+    expect(first.hostLogins).toEqual(["claude", "opencode"]);
+    expect(first.revision).toBe(second.revision);
+  });
+
+  test("a shared login replaces its saved values and no longer reacts to them", () => {
+    const withCredentials = (hostLogins: string[], token: string): State => ({
+      credentials: {
+        CLAUDE_CODE_OAUTH_TOKEN: { value: token, savedAt: "2026-01-01" },
+        ANTHROPIC_API_KEY: { value: "sk-ant", savedAt: "2026-01-01" },
+        OPENAI_API_KEY: { value: "sk-oc", savedAt: "2026-01-01" },
+        GITHUB_TOKEN: { value: "ghp", savedAt: "2026-01-01" },
+      },
+      hostLogins,
+      sandboxes: { a: sandbox },
+    });
+
+    const own = sandboxEnvironment(withCredentials([], "t1"), sandbox);
+    expect(Object.keys(own.env).sort()).toEqual([
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "GITHUB_TOKEN",
+      "OPENAI_API_KEY",
+      "PASEO_PASSWORD",
+    ]);
+
+    const shared = sandboxEnvironment(withCredentials(["claude", "github"], "t1"), sandbox);
+    expect(Object.keys(shared.env).sort()).toEqual(["OPENAI_API_KEY", "PASEO_PASSWORD"]);
+    // Rotating a value the sandbox no longer uses must not ask for a restart.
+    expect(sandboxEnvironment(withCredentials(["claude", "github"], "t2"), sandbox).revision).toBe(
+      shared.revision,
+    );
   });
 });

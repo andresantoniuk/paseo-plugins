@@ -9,6 +9,7 @@ import { z } from "zod";
 export const CREDENTIAL_PRESETS = [
   {
     name: "CLAUDE_CODE_OAUTH_TOKEN",
+    hostLogin: "claude",
     label: "Claude subscription token",
     hint: "Run `claude setup-token` once on any machine. Needs a Pro, Max, Team or Enterprise plan. Valid for one year.",
     kind: "model",
@@ -16,6 +17,7 @@ export const CREDENTIAL_PRESETS = [
   },
   {
     name: "ANTHROPIC_API_KEY",
+    hostLogin: "claude",
     label: "Anthropic API key",
     hint: "A Claude Console key. Billed per token.",
     kind: "model",
@@ -27,11 +29,13 @@ export const CREDENTIAL_PRESETS = [
     hint: "An OpenAI Platform key. Codex ignores OPENAI_API_KEY, so the sandbox signs Codex in with it.",
     kind: "model",
     lifetimeDays: null,
+    hostLogin: "codex",
     login: ["codex", "login", "--with-api-key"],
     logout: ["sh", "-c", 'test ! -f "$CODEX_HOME/auth.json" || codex logout'],
   },
   {
     name: "OPENAI_API_KEY",
+    hostLogin: "opencode",
     label: "OpenAI API key for OpenCode",
     hint: "An OpenAI Platform key for OpenCode models.",
     kind: "model",
@@ -39,12 +43,61 @@ export const CREDENTIAL_PRESETS = [
   },
   {
     name: "GITHUB_TOKEN",
+    hostLogin: "github",
     label: "GitHub token",
     hint: "A fine-grained personal access token with read access to the repositories you clone. Used for git over https on github.com.",
     kind: "git",
     lifetimeDays: null,
   },
 ] as const;
+
+/**
+ * Agent logins that can be shared with this host instead of saved here. The sandbox mounts the
+ * host's own folder, so the sandbox and the host are one client of one login.
+ */
+export const HOST_LOGINS = [
+  {
+    id: "claude",
+    label: "Use this host's Claude login",
+    hint: "Mounts the Claude config folder (CLAUDE_CONFIG_DIR, default ~/.claude). A saved Claude token or Anthropic key is ignored while this is on",
+  },
+  {
+    id: "codex",
+    label: "Use this host's Codex login",
+    hint: "Mounts the Codex home folder (CODEX_HOME, default ~/.codex). A saved Codex API key is ignored while this is on",
+  },
+  {
+    id: "opencode",
+    label: "Use this host's OpenCode login",
+    hint: "Mounts the OpenCode data folder (default ~/.local/share/opencode). A saved OpenAI key for OpenCode is ignored while this is on",
+  },
+  {
+    id: "github",
+    label: "Use this host's GitHub login",
+    hint: "Reads the token from `gh auth token` each time a sandbox starts. It carries all the access your gh login has. A saved GitHub token is ignored while this is on",
+  },
+] as const;
+
+export type HostLoginId = (typeof HOST_LOGINS)[number]["id"];
+
+const hostLoginIds = HOST_LOGINS.map((login) => login.id) as [HostLoginId, ...HostLoginId[]];
+
+export const hostLoginSchema = z.object({ id: z.enum(hostLoginIds), enabled: z.boolean() });
+
+const hostLoginList = z.object({ hostLogins: z.array(hostLoginSchema) });
+
+export const listHostLogins = defineRpc({
+  name: "sandbox.host-logins.list",
+  input: z.object({}),
+  output: hostLoginList,
+});
+
+/** Takes effect when a sandbox next starts; running ones show as needing a restart. */
+export const setHostLogin = defineRpc({
+  name: "sandbox.host-logins.set",
+  input: hostLoginSchema,
+  output: hostLoginList,
+});
 
 export type CredentialKind = (typeof CREDENTIAL_PRESETS)[number]["kind"] | "other";
 
