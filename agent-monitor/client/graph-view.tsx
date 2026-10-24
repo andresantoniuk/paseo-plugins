@@ -638,7 +638,7 @@ export function AgentGraph({
                 : edge.kind === "subagent"
                   ? theme.colors.statusWarning
                   : theme.colors.foregroundMuted;
-            const hitHeight = Math.max(compact ? 24 : 12, thickness);
+            const hitHeight = Math.max(compact ? 24 / scale : 12, thickness);
             return (
               <Pressable
                 key={`${edge.from}>${edge.to}`}
