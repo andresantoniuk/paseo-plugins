@@ -5,6 +5,7 @@ import {
   HOST_LOGINS,
   type HostLoginId,
 } from "../shared/credentials";
+import { OMP_AGENT_TARGET } from "./host-logins";
 import type { SandboxRecord, State, Store } from "./store";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -66,6 +67,8 @@ export function sandboxEnvironment(state: State, sandbox: SandboxRecord): Sandbo
     applied[name] = value;
     if (!isLoginCredential(name)) env[name] = value;
   }
+  // Last, so a saved variable of the same name cannot point omp away from the shared folder.
+  if (hostLogins.includes("omp")) env.PI_CODING_AGENT_DIR = OMP_AGENT_TARGET;
   const revision = createHash("sha256")
     .update(JSON.stringify([sortedEntries(env), sortedEntries(applied), hostLogins]))
     .digest("hex");

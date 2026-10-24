@@ -123,4 +123,20 @@ describe("sandbox environment", () => {
       shared.revision,
     );
   });
+
+  test("sharing OMP tells the sandbox's omp where the host's folder is mounted", () => {
+    const off = sandboxEnvironment(state([]), sandbox);
+    const on = sandboxEnvironment(state(["omp"]), sandbox);
+    expect(off.env.PI_CODING_AGENT_DIR).toBeUndefined();
+    expect(on.env.PI_CODING_AGENT_DIR).toBe("/home/paseo/.omp-agent");
+
+    // A saved variable of the same name must not point omp away from the shared folder.
+    const hijack: State = {
+      ...state(["omp"]),
+      credentials: { PI_CODING_AGENT_DIR: { value: "/elsewhere", savedAt: "2026-01-01" } },
+    };
+    expect(sandboxEnvironment(hijack, sandbox).env.PI_CODING_AGENT_DIR).toBe(
+      "/home/paseo/.omp-agent",
+    );
+  });
 });

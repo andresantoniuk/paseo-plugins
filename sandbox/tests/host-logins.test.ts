@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -28,13 +28,25 @@ describe("host login mounts", () => {
 
     expect(mounts).toEqual([
       { source: codex, target: "/home/paseo/.codex", readOnly: false },
+      { source: join(codex, "prompts"), target: "/home/paseo/.codex/prompts", readOnly: true },
+      { source: join(codex, "skills"), target: "/home/paseo/.codex/skills", readOnly: true },
       {
         source: join(codex, "config.toml"),
         target: "/home/paseo/.codex/config.toml",
         readOnly: true,
       },
-      { source: join(codex, "skills"), target: "/home/paseo/.codex/skills", readOnly: true },
     ]);
+    // hooks.json does not exist, and an empty one is not a valid settings file for every tool.
+    await expect(stat(join(codex, "hooks.json"))).rejects.toThrow("ENOENT");
+  });
+
+  test("a protected folder that does not exist yet is created, so the sandbox cannot plant it", async () => {
+    const { codex, env } = await fixture();
+    await expect(stat(join(codex, "prompts"))).rejects.toThrow("ENOENT");
+
+    await hostLoginMounts({ enabled: ["codex"], env, platform: "linux", sandboxUid: owner });
+
+    expect((await stat(join(codex, "prompts"))).isDirectory()).toBe(true);
   });
 
   test("honor the tool's own location variable, and mount nothing when nothing is shared", async () => {
@@ -57,6 +69,32 @@ describe("host login mounts", () => {
         readOnly: false,
       },
     ]);
+  });
+
+  test("OMP shares its agent folder, found the way OMP itself finds it", async () => {
+    const { root } = await fixture();
+    const agent = join(root, "omp-agent");
+    await mkdir(join(agent, "hooks"), { recursive: true });
+    await writeFile(join(agent, "agent.db"), "");
+    await writeFile(join(agent, "mcp.json"), "{}");
+    await writeFile(join(agent, "sessions.txt"), "");
+    const request = { enabled: ["omp"], platform: "linux", sandboxUid: owner } as const;
+
+    const mounts = await hostLoginMounts({ ...request, env: { PI_CODING_AGENT_DIR: agent } });
+
+    expect(mounts[0]).toEqual({ source: agent, target: "/home/paseo/.omp-agent", readOnly: false });
+    const locked = mounts.slice(1).map((mount) => mount.target.split("/").pop());
+    // Folders are created if missing, so extensions cannot be planted. Files only if they exist.
+    expect(locked).toContain("extensions");
+    expect(locked).toContain("hooks");
+    expect(locked).toContain("mcp.json");
+    expect(locked).not.toContain("config.yml");
+    expect(mounts.slice(1).every((mount) => mount.readOnly)).toBe(true);
+    expect((await stat(join(agent, "extensions"))).isDirectory()).toBe(true);
+    // The login store and sessions stay writable, so a refreshed token reaches the host.
+    await expect(
+      hostLoginMounts({ ...request, env: { PI_CODING_AGENT_DIR: join(root, "none") } }),
+    ).rejects.toThrow("does not exist on this host");
   });
 
   test("refuse a missing folder instead of letting Docker create it on the host", async () => {
@@ -95,7 +133,7 @@ describe("host login mounts", () => {
     await chmod(codex, 0o777);
     await expect(
       hostLoginMounts({ enabled: ["codex"], env, platform: "linux", sandboxUid: other }),
-    ).resolves.toHaveLength(3);
+    ).resolves.toHaveLength(4);
   });
 
   test("refuse hosts where the logins are not plain files", async () => {
