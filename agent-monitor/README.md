@@ -81,9 +81,12 @@ and backstop; on web and desktop, refreshes pause while the window is hidden and
 borrows the selected host's connection; it opens no socket of its own. Agents and workspaces in
 background workspaces are included.
 
-The graph reads the tail of each agent's timeline (200 entries, up to 60 agents, four at a time) to
-derive message and subagent edges. Closed agents or unreadable timelines contribute no edges, and
-the graph never opens a separate connection of its own.
+The graph reads timeline tails (200 entries, up to 60 agents, four at a time) to derive message
+and subagent edges. It refreshes every 30 seconds while open in the foreground and when Refresh
+is pressed. Readable closed timelines can contribute interactions; unreadable timelines are
+counted in the graph toolbar. Filters only change the visible graph and do not start new scans.
+The graph uses the selected host's existing connection. Graph filters, selection, and positions
+are temporary; the existing host-scoped monitor settings are unchanged.
 
 ## Limits
 

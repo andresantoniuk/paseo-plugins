@@ -6,6 +6,9 @@ import type { AgentEntry } from "./monitor";
 const TIMELINE_LIMIT = 200;
 const MAX_AGENTS = 60;
 const CONCURRENCY = 4;
+// Matches the monitor roster's 30s backstop. Interaction keys are only agent ids, so a
+// stable roster would otherwise keep serving the first timeline read forever.
+const REFETCH_INTERVAL_MS = 30_000;
 
 type PaseoApi = ReturnType<typeof usePaseo>;
 
@@ -38,16 +41,20 @@ function targetFromDetail(
  * Parent-child edges come from the directory; this adds two more signals:
  *  - `tool_call.agentMessage.sender` on a timeline item means another agent
  *    wrote to this one, so the edge points from sender to owner.
- *  - a tool-call detail carrying an agent id or a child session id means the
- *    owner dispatched that agent.
+ *  - a tool-call detail carrying a child session id that resolves to a local
+ *    agent means the owner dispatched that agent.
  *
- * It is deliberately bounded: the newest 60 agents and 200 timeline entries
- * each. A closed agent with no readable timeline contributes no edges.
+ * It is deliberately bounded: 60 agents (open ones first, then most recently
+ * updated) and 200 timeline entries each. A closed agent with no readable
+ * timeline contributes no edges.
+ * An aborted signal stops further batches and rejects; requests already sent
+ * to the SDK cannot be cancelled and are left to settle.
  */
 export async function fetchInteractions(
   paseo: PaseoApi,
   hostId: string,
   entries: readonly AgentEntry[],
+  signal?: AbortSignal,
 ): Promise<InteractionData> {
   const selected = [...entries]
     .sort((left, right) => {
@@ -72,8 +79,10 @@ export async function fetchInteractions(
     if (!from || !to || from === to) return;
     const key = `${from}>${to}`;
     const existing = edgeMap.get(key);
-    if (existing) existing.count += count;
-    else edgeMap.set(key, { from, to, count, kind });
+    if (existing) {
+      existing.count += count;
+      if (kind === "message") existing.kind = "message";
+    } else edgeMap.set(key, { from, to, count, kind });
   };
   const addSubagent = (parentId: string, label: string, kind: string) => {
     const key = `${parentId}>${label}`;
@@ -86,6 +95,8 @@ export async function fetchInteractions(
   };
 
   for (let index = 0; index < selected.length; index += CONCURRENCY) {
+    if (signal?.aborted)
+      throw Object.assign(new Error("Graph scan aborted"), { name: "AbortError" });
     await Promise.all(
       selected.slice(index, index + CONCURRENCY).map(async (entry) => {
         try {
@@ -157,8 +168,9 @@ export function useInteractionGraph(
     .join(",");
   return useQuery({
     queryKey: ["agent-monitor", "interactions", hostId, ids],
-    queryFn: () => fetchInteractions(paseo, hostId, entries),
+    queryFn: ({ signal }) => fetchInteractions(paseo, hostId, entries, signal),
     enabled: enabled && entries.length > 0,
     staleTime: 20_000,
+    refetchInterval: REFETCH_INTERVAL_MS,
   });
 }

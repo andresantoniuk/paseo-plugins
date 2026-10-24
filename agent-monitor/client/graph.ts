@@ -93,14 +93,6 @@ export function edgeLabel(count: number): string {
   return count > 1 ? String(count) : "";
 }
 
-function shortId(value: string): string {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) | 0;
-  }
-  return Math.abs(hash).toString(36);
-}
-
 function mergeEdge(
   edges: Map<string, GraphEdge>,
   from: string,
@@ -121,13 +113,13 @@ function mergeEdge(
 }
 
 /**
- * A clustered force layout for agents and their provider subagents.
+ * A clustered shelf layout for agents and their provider subagents.
  *
  * Paseo agents and provider-native subagents live in different universes: the
  * former have `parentAgentId`, the latter only appear as `Task`/`Agent` tool
  * calls in a timeline. Both are nodes here, with the invocation count as the
- * edge weight. A cluster attraction keeps each project/workspace together so
- * the canvas reads as groups instead of a cloud.
+ * edge weight. Each project/workspace is laid out as one panel so the canvas
+ * reads as groups instead of a cloud.
  */
 export function buildGraph(
   entries: readonly AgentEntry[],
@@ -167,13 +159,14 @@ export function buildGraph(
 
   const subagentNodes: GraphNode[] = [];
   if (options.includeSubagents !== false) {
-    const subagents = [...(interactions?.subagents ?? [])]
+    const subagents = (interactions?.subagents ?? [])
+      .filter((subagent) => byId.has(subagent.parentId))
       .sort((left, right) => right.count - left.count)
       .slice(0, 80);
     for (const subagent of subagents) {
       const parent = byId.get(subagent.parentId);
       if (!parent) continue;
-      const id = `sub:${subagent.parentId}:${shortId(subagent.label)}`;
+      const id = `sub:${subagent.id}`;
       const existing = byId.get(id);
       if (existing) {
         existing.messageCount += subagent.count;
@@ -210,7 +203,7 @@ export function buildGraph(
 
   // Compact shelf layout: each project/workspace is a panel; panels wrap into
   // rows and nodes inside a panel use one or two columns. Groups stay compact
-  // and readable instead of being scattered by a force simulation.
+  // and readable instead of being scattered across the canvas.
   const clusters = new Map<string, GraphNode[]>();
   for (const node of nodes) {
     const list = clusters.get(node.colorKey);

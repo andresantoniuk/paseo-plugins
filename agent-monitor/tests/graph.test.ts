@@ -1,8 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildGraph, edgeThickness, repoLabel } from "../client/graph";
-import { fetchInteractions } from "../client/graph-data";
+import { fetchInteractions, useInteractionGraph } from "../client/graph-data";
 import type { AgentEntry } from "../client/monitor";
 
+const hooks = vi.hoisted(() => ({
+  paseo: undefined as unknown,
+  query: undefined as undefined | Record<string, unknown>,
+}));
+
+vi.mock("@getpaseo/plugin/client", () => ({ usePaseo: () => hooks.paseo }));
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: (options: Record<string, unknown>) => {
+    hooks.query = options;
+    return options;
+  },
+}));
 const HOST = "host-a";
 
 function entry(
@@ -157,6 +169,71 @@ describe("buildGraph", () => {
 
     expect(layout.nodes.map((node) => node.agentId ?? node.id).sort()).toEqual(["a", "b"]);
   });
+
+  it("keeps visible parents' subagents when hidden parents fill the cap", () => {
+    const hidden = Array.from({ length: 81 }, (_, index) => ({
+      parentId: "ghost",
+      id: `ghost>task-${index}`,
+      label: `task-${index}`,
+      kind: "x",
+      count: 10,
+    }));
+    const layout = buildGraph(
+      [entry("parent")],
+      {
+        messagesByAgent: new Map(),
+        edges: [],
+        subagents: [
+          ...hidden,
+          { parentId: "parent", id: "parent>Research", label: "Research", kind: "x", count: 1 },
+        ],
+      },
+      HOST,
+    );
+
+    const subagents = layout.nodes.filter((node) => node.kind === "subagent");
+    expect(subagents.map((node) => node.title)).toEqual(["Research"]);
+  });
+
+  it("keeps subagents whose labels collide under a string hash apart", () => {
+    // "Aa" and "BB" share the same 31-multiplier hash.
+    const layout = buildGraph(
+      [entry("parent")],
+      {
+        messagesByAgent: new Map(),
+        edges: [],
+        subagents: [
+          { parentId: "parent", id: "parent>Aa", label: "Aa", kind: "x", count: 2 },
+          { parentId: "parent", id: "parent>BB", label: "BB", kind: "x", count: 3 },
+        ],
+      },
+      HOST,
+    );
+
+    const subagents = layout.nodes.filter((node) => node.kind === "subagent");
+    expect(subagents.map((node) => [node.title, node.messageCount]).sort()).toEqual([
+      ["Aa", 2],
+      ["BB", 3],
+    ]);
+    expect(new Set(subagents.map((node) => node.id)).size).toBe(2);
+    expect(layout.edges).toHaveLength(2);
+  });
+
+  it("keeps the message kind when a message edge merges with a tree edge", () => {
+    const parent = entry("parent");
+    const child = entry("child", { parent: "parent" });
+    const layout = buildGraph(
+      [parent, child],
+      {
+        messagesByAgent: new Map([["child", 1]]),
+        edges: [{ from: "parent", to: "child", count: 2, kind: "message" }],
+        subagents: [],
+      },
+      HOST,
+    );
+
+    expect(layout.edges).toEqual([{ from: "parent", to: "child", count: 3, kind: "message" }]);
+  });
 });
 
 type Row = { item: Record<string, unknown> };
@@ -241,5 +318,103 @@ describe("fetchInteractions", () => {
 
     expect(data.unreadable).toBe(1);
     expect(data.messagesByAgent.get("b")).toBe(1);
+  });
+
+  it.each([
+    ["message resolves last", ["a", "b"]],
+    ["tree resolves last", ["b", "a"]],
+  ])("keeps the message kind on a shared edge when %s", async (_name, order) => {
+    // Agent a dispatches b's session (tree a>b); agent b records a message from a (message a>b).
+    const timelines: Record<string, Row[]> = {
+      a: [toolCall({ detail: { type: "sub_agent", childSessionId: "session-b" } })],
+      b: [toolCall({ agentMessage: { sender: { id: "a" } } })],
+    };
+    const release: Record<string, () => void> = {};
+    const paseo = {
+      agents: {
+        ref: (id: string) => ({
+          timeline: {
+            refetch: () => {
+              const { promise, resolve } = Promise.withResolvers();
+              release[id] = () => resolve({ entries: timelines[id] });
+              return promise;
+            },
+          },
+        }),
+      },
+    } as unknown as Parameters<typeof fetchInteractions>[0];
+
+    const pending = fetchInteractions(paseo, HOST, [
+      entry("a"),
+      entry("b", { sessionId: "session-b" }),
+    ]);
+    for (const id of order) release[id]?.();
+    const data = await pending;
+
+    expect(data.edges).toEqual([{ from: "a", to: "b", count: 2, kind: "message" }]);
+  });
+
+  it("stops reading further batches once the signal aborts", async () => {
+    const controller = new AbortController();
+    const refetch = vi.fn(async () => {
+      controller.abort();
+      return { entries: [] };
+    });
+    const paseo = {
+      agents: { ref: () => ({ timeline: { refetch } }) },
+    } as unknown as Parameters<typeof fetchInteractions>[0];
+    const entries = ["a", "b", "c", "d", "e", "f"].map((id) => entry(id));
+
+    await expect(fetchInteractions(paseo, HOST, entries, controller.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    // The first batch of four was already in flight; the second never starts.
+    expect(refetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not read any timeline when the signal is already aborted", async () => {
+    const refetch = vi.fn(async () => ({ entries: [] }));
+    const paseo = {
+      agents: { ref: () => ({ timeline: { refetch } }) },
+    } as unknown as Parameters<typeof fetchInteractions>[0];
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      fetchInteractions(paseo, HOST, [entry("a")], controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(refetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("useInteractionGraph", () => {
+  it("re-reads a stable roster on the monitor's 30s foreground interval", () => {
+    useInteractionGraph(HOST, [entry("a")], true);
+
+    expect(hooks.query).toMatchObject({ enabled: true, refetchInterval: 30_000 });
+    expect(hooks.query?.refetchIntervalInBackground).toBeFalsy();
+  });
+
+  it("stays disabled for another view or an empty roster", () => {
+    useInteractionGraph(HOST, [entry("a")], false);
+    expect(hooks.query?.enabled).toBe(false);
+
+    useInteractionGraph(HOST, [], true);
+    expect(hooks.query?.enabled).toBe(false);
+  });
+
+  it("hands the query's abort signal to the fetch", async () => {
+    hooks.paseo = fakePaseo({ a: [] });
+    useInteractionGraph(HOST, [entry("a")], true);
+    const queryFn = hooks.query?.queryFn as (context: { signal: AbortSignal }) => Promise<unknown>;
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(queryFn({ signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    await expect(queryFn({ signal: new AbortController().signal })).resolves.toMatchObject({
+      unreadable: 0,
+    });
   });
 });
