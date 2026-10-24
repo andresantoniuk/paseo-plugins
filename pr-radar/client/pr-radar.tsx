@@ -24,6 +24,8 @@ import {
   openPullRequestUrl,
   type RadarBucket,
   type RadarRow,
+  type SortKey,
+  sortRows,
 } from "./radar";
 import {
   DIRECTORY_PARTIAL,
@@ -32,6 +34,7 @@ import {
   type RadarFilter,
   VIEWER_URL_LIMIT,
 } from "./screen-state";
+import { SortControls } from "./sort-controls";
 import { useRadar } from "./use-radar";
 import { revealFocusedChip } from "./web";
 
@@ -97,6 +100,7 @@ export function PrRadar({
       ? (filter as SavedView)
       : null;
   const [windowDays, setWindowDays] = useState(30);
+  const [sortKey, setSortKey] = useState<SortKey>("attention");
   const [search, setSearch] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const [openError, setOpenError] = useState<string | null>(null);
@@ -253,6 +257,7 @@ export function PrRadar({
       }),
     [activeOnly, now, rows, savedView, search, selected, focusedPr],
   );
+  const sortedRows = useMemo(() => sortRows(visibleRows, sortKey), [visibleRows, sortKey]);
 
   const styles = useMemo(() => {
     const gutter = layout.compact ? 14 : 24;
@@ -786,6 +791,7 @@ export function PrRadar({
         style={styles.search}
         value={search}
       />
+      <SortControls sortKey={sortKey} onSort={setSortKey} styles={styles} />
       {viewerData ? (
         <View style={{ gap: 7 }}>
           <Text style={styles.heroDetail}>
@@ -838,7 +844,7 @@ export function PrRadar({
     >
       <FlatList
         contentContainerStyle={styles.content}
-        data={visibleRows}
+        data={sortedRows}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={header}
         ListEmptyComponent={

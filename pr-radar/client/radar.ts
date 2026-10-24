@@ -559,6 +559,55 @@ export function applyViewerScope(
   return result;
 }
 
+export const SORT_KEYS = ["attention", "mergeable", "recent", "oldest", "repository"] as const;
+export type SortKey = (typeof SORT_KEYS)[number];
+
+export const SORT_TITLES: Record<SortKey, string> = {
+  mergeable: "Mergeable first",
+  attention: "Needs attention first",
+  recent: "Recently updated",
+  oldest: "Oldest first",
+  repository: "Repository",
+};
+
+// Unknown or unparsable activity counts as the epoch (the oldest), which keeps the order total.
+const activityOf = (row: RadarRow) => Date.parse(row.activityAt ?? "") || 0;
+const oldestFirst = (left: RadarRow, right: RadarRow) =>
+  activityOf(left) - activityOf(right) || left.title.localeCompare(right.title);
+const newestFirst = (left: RadarRow, right: RadarRow) =>
+  activityOf(right) - activityOf(left) || left.title.localeCompare(right.title);
+
+/** Orders rows for display. Returns a new array; the input order is the bucket order. */
+export function sortRows(rows: readonly RadarRow[], key: SortKey): RadarRow[] {
+  const sorted = [...rows];
+  switch (key) {
+    case "mergeable":
+      // classifyRow only yields "ready" for the viewer's own, non-draft, mergeable PRs.
+      return sorted.sort(
+        (left, right) =>
+          Number(right.bucket === "ready") - Number(left.bucket === "ready") ||
+          BUCKET_ORDER[left.bucket] - BUCKET_ORDER[right.bucket] ||
+          newestFirst(left, right),
+      );
+    case "attention":
+      // The default: the order applyViewerScope produces, longest waiting first within a bucket.
+      return sorted.sort(
+        (left, right) =>
+          BUCKET_ORDER[left.bucket] - BUCKET_ORDER[right.bucket] || oldestFirst(left, right),
+      );
+    case "recent":
+      return sorted.sort(newestFirst);
+    case "oldest":
+      return sorted.sort(oldestFirst);
+    case "repository":
+      return sorted.sort(
+        (left, right) =>
+          left.repository.localeCompare(right.repository) ||
+          (left.number ?? 0) - (right.number ?? 0),
+      );
+  }
+}
+
 export function matchesRow(row: RadarRow, needle: string): boolean {
   const query = needle.trim().toLowerCase();
   if (!query) return true;

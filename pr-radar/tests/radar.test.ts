@@ -18,6 +18,7 @@ import {
   type PaseoWorkspace,
   type RadarAgent,
   type RadarRow,
+  sortRows,
 } from "../client/radar";
 import { needsYouSummary, parseRadarParams, radarWarnings } from "../client/screen-state";
 import { type GitHubInboxItem, GitHubInboxItemSchema } from "../shared/viewer-scope";
@@ -69,6 +70,146 @@ function row(overrides: Partial<RadarRow> = {}): RadarRow {
     ...overrides,
   };
 }
+
+describe("sorting", () => {
+  const rows = [
+    row({
+      id: "red-new",
+      bucket: "needs-you",
+      activityAt: "2026-08-30T12:00:00.000Z",
+      repository: "z/one",
+    }),
+    row({
+      id: "ready-old",
+      bucket: "ready",
+      activityAt: "2026-08-01T00:00:00.000Z",
+      repository: "a/two",
+    }),
+    row({
+      id: "ready-new",
+      bucket: "ready",
+      activityAt: "2026-08-29T00:00:00.000Z",
+      repository: "m/three",
+    }),
+    row({
+      id: "ready-newest",
+      bucket: "ready",
+      activityAt: "2026-08-30T13:00:00.000Z",
+      repository: "b/four",
+    }),
+    row({
+      id: "waiting",
+      bucket: "waiting",
+      activityAt: "2026-08-15T00:00:00.000Z",
+      repository: "a/two",
+      number: 7,
+    }),
+  ];
+  const ids = (sorted: RadarRow[]) => sorted.map((r) => r.id);
+  const titles = (sorted: RadarRow[]) => sorted.map((r) => r.title);
+
+  test("mergeable first: ready rows lead, newest first, then the remaining rows by bucket", () => {
+    expect(ids(sortRows(rows, "mergeable"))).toEqual([
+      "ready-newest",
+      "ready-new",
+      "ready-old",
+      "red-new",
+      "waiting",
+    ]);
+  });
+
+  test("needs attention first keeps the bucket order, oldest first within a bucket", () => {
+    expect(ids(sortRows(rows, "attention"))).toEqual([
+      "red-new",
+      "ready-old",
+      "ready-new",
+      "ready-newest",
+      "waiting",
+    ]);
+  });
+
+  test("recent, oldest, and repository orders", () => {
+    expect(ids(sortRows(rows, "recent"))).toEqual([
+      "ready-newest",
+      "red-new",
+      "ready-new",
+      "waiting",
+      "ready-old",
+    ]);
+    expect(ids(sortRows(rows, "oldest"))).toEqual([
+      "ready-old",
+      "waiting",
+      "ready-new",
+      "red-new",
+      "ready-newest",
+    ]);
+    expect(ids(sortRows(rows, "repository"))).toEqual([
+      "waiting",
+      "ready-old",
+      "ready-newest",
+      "ready-new",
+      "red-new",
+    ]);
+  });
+
+  describe("ties", () => {
+    const tied = ["Bravo", "Alpha", "Charlie"].map((title, index) =>
+      row({
+        id: `tie-${title}`,
+        number: index + 1,
+        url: `https://github.com/getpaseo/paseo/pull/${index + 1}`,
+        title,
+        activityAt: "2026-08-01T00:00:00.000Z",
+      }),
+    );
+    const newer = row({
+      id: "tie-Delta",
+      number: 4,
+      url: "https://github.com/getpaseo/paseo/pull/4",
+      title: "Delta",
+      activityAt: "2026-08-05T00:00:00.000Z",
+    });
+    const scope = {
+      authoredUrls: [...tied, newer].map((item) => item.url),
+      reviewRequestedUrls: [],
+      error: null,
+      inboxItems: [],
+    };
+    // The order the radar already shows: bucket, longest waiting first, then title.
+    const existing = applyViewerScope([...tied, newer], scope);
+
+    test("needs attention first reproduces the existing order, titles ascending on ties", () => {
+      expect(titles(existing)).toEqual(["Alpha", "Bravo", "Charlie", "Delta"]);
+      expect(ids(sortRows([...existing].reverse(), "attention"))).toEqual(ids(existing));
+    });
+
+    test("oldest first and recently updated both break ties by title ascending", () => {
+      expect(titles(sortRows(existing, "oldest"))).toEqual(["Alpha", "Bravo", "Charlie", "Delta"]);
+      expect(titles(sortRows(existing, "recent"))).toEqual(["Delta", "Alpha", "Bravo", "Charlie"]);
+    });
+  });
+
+  test("rows without a known activity time sort as the oldest and never throw", () => {
+    const unknown = row({ id: "unknown", activityAt: null });
+    const known = row({ id: "known", activityAt: "2026-08-10T00:00:00.000Z" });
+    expect(ids(sortRows([known, unknown], "oldest"))).toEqual(["unknown", "known"]);
+    expect(ids(sortRows([unknown, known], "recent"))).toEqual(["known", "unknown"]);
+    expect(ids(sortRows([known, unknown], "attention"))).toEqual(["unknown", "known"]);
+  });
+
+  test("fully tied rows keep input order in every sort, including absent dates and PR numbers", () => {
+    const tied = ["second", "first"].map((id) => row({ id, activityAt: null, number: null }));
+    for (const key of ["attention", "mergeable", "recent", "oldest", "repository"] as const) {
+      expect(ids(sortRows(tied, key))).toEqual(["second", "first"]);
+    }
+  });
+
+  test("does not mutate its input", () => {
+    const copy = [...rows];
+    sortRows(rows, "recent");
+    expect(rows).toEqual(copy);
+  });
+});
 
 describe("sidebar queue and screen state", () => {
   test("counts classified needs-you rows, without including ready PRs", () => {
