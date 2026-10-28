@@ -93,21 +93,21 @@ screenshot uses the same synthetic project and agent names.
 
 ## How it reads state
 
-`usePaseo().agents.list()` pages the daemon agent directory, `usePaseo().workspaces.list()` reads
-workspace pin state, project id, and diff stats (200 per page, up to 10 pages each), and
-`usePaseo().projects.list()` supplies registered project names, including custom renames, so an
-agent whose workspace is beyond the paged workspace list still lands under its real project. Rows
-refresh from agent, workspace, and project subscription deltas, debounced 750ms, with a 30s
-backstop refetch. The screen, the sidebar row, and its popover share that query, subscription set,
-and backstop; on web and desktop, refreshes pause while the window is hidden and catch up when it returns. The plugin
-borrows the selected host's connection; it opens no socket of its own. Agents and workspaces in
-background workspaces are included.
+Each online host is read through its own existing client (`getPaseoClient(serverId)`):
+`agents.list()` pages the daemon agent directory, `workspaces.list()` reads workspace pin state,
+project id, and diff stats (200 per page, up to 10 pages each), and `projects.list()` supplies
+registered project names, including custom renames, so an agent whose workspace is beyond the
+paged workspace list still lands under its real project. Rows refresh from agent, workspace, and
+project subscription deltas on every host, debounced 750ms, with a 30s backstop refetch. The
+screen, the sidebar row, and its popover share that query, subscription set, and backstop; on web
+and desktop, refreshes pause while the window is hidden and catch up when it returns. The plugin
+opens no socket of its own. Agents and workspaces in background workspaces are included.
 
-The graph reads timeline tails (200 entries, up to 60 agents, four at a time) to derive message
+The graph reads timeline tails (200 entries, up to 60 agents per host, four at a time) to derive message
 and subagent edges. It refreshes every 30 seconds while open in the foreground and when Refresh
 is pressed. Readable closed timelines can contribute interactions; unreadable timelines are
 counted in the graph toolbar. Filters only change the visible graph and do not start new scans.
-The graph uses the selected host's existing connection. Graph filters, selection, and positions
+Each host's timelines are swept through that host's client and merged. Graph filters, selection, and positions
 are temporary; the existing host-scoped monitor settings are unchanged.
 
 ## Limits

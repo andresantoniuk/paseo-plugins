@@ -11,7 +11,12 @@ const hooks = vi.hoisted(() => ({
   clients: {} as Record<string, unknown>,
   query: undefined as
     | undefined
-    | { queryKey: unknown[]; queryFn: (context?: { signal?: AbortSignal }) => Promise<unknown> },
+    | {
+        queryKey: unknown[];
+        queryFn: (context: { signal: AbortSignal }) => Promise<unknown>;
+        enabled?: boolean;
+        refetchInterval?: number;
+      },
 }));
 
 vi.mock("@getpaseo/plugin/client", () => ({
@@ -24,7 +29,7 @@ vi.mock("@getpaseo/plugin/client", () => ({
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (options: {
     queryKey: unknown[];
-    queryFn: (context?: { signal?: AbortSignal }) => Promise<unknown>;
+    queryFn: (context: { signal: AbortSignal }) => Promise<unknown>;
   }) => {
     hooks.query = options;
     return options;
@@ -122,7 +127,7 @@ describe("useAllHostsInteractionGraph", () => {
     ];
 
     useAllHostsInteractionGraph([hostA, hostB], entries, true);
-    const data = (await hooks.query?.queryFn({})) as {
+    const data = (await hooks.query?.queryFn({ signal: new AbortController().signal })) as {
       messagesByAgent: Map<string, number>;
       unreadable: number;
     };
@@ -130,5 +135,27 @@ describe("useAllHostsInteractionGraph", () => {
     expect(data.messagesByAgent.get("a1")).toBe(1);
     expect(data.unreadable).toBe(1);
     expect(hooks.query?.queryKey).toContain("srv-a,srv-b");
+  });
+
+  test("re-reads a stable roster on the 30s foreground interval, only while enabled", () => {
+    const entries = [withHostScope(agentEntry("a1"), hostA)];
+    useAllHostsInteractionGraph([hostA], entries, true);
+    expect(hooks.query).toMatchObject({ enabled: true, refetchInterval: 30_000 });
+
+    useAllHostsInteractionGraph([hostA], entries, false);
+    expect(hooks.query?.enabled).toBe(false);
+    useAllHostsInteractionGraph([hostA], [], true);
+    expect(hooks.query?.enabled).toBe(false);
+  });
+
+  test("rejects a cancelled sweep instead of reporting every timeline unreadable", async () => {
+    hooks.clients = { "srv-a": timelineClient({ a1: [] }) };
+    useAllHostsInteractionGraph([hostA], [withHostScope(agentEntry("a1"), hostA)], true);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(hooks.query?.queryFn({ signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
   });
 });

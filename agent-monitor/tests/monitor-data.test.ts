@@ -1,14 +1,8 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { PaseoApi } from "../client/monitor";
-import {
-  loadAgents,
-  loadWorkspaces,
-  useAllHostsMonitor,
-  useMonitorQuery,
-} from "../client/monitor-data";
+import { loadAgents, loadWorkspaces, useAllHostsMonitor } from "../client/monitor-data";
 
 const hooks = vi.hoisted(() => ({
-  paseo: undefined as unknown,
   hosts: [] as Array<{ serverId: string; label: string; status: string }>,
   clients: {} as Record<string, unknown>,
   effects: [] as Array<() => undefined | (() => void)>,
@@ -16,7 +10,6 @@ const hooks = vi.hoisted(() => ({
 }));
 
 vi.mock("@getpaseo/plugin/client", () => ({
-  usePaseo: () => hooks.paseo,
   useHosts: () => hooks.hosts,
   getPaseoClient: (serverId: string) => hooks.clients[serverId],
 }));
@@ -101,81 +94,6 @@ describe("directory loaders", () => {
   });
 });
 
-describe("useMonitorQuery", () => {
-  function connect() {
-    const release = vi.fn(async () => {});
-    const subscription = { subscribe: vi.fn(() => () => {}), release };
-    const agents = {
-      list: vi.fn(async (options: Record<string, unknown>) =>
-        options.subscribe
-          ? { subscription }
-          : { entries: [{ id: "a" }], pageInfo: { hasMore: false, nextCursor: null } },
-      ),
-    };
-    const workspaces = {
-      list: vi.fn(async (options: Record<string, unknown>) =>
-        options.subscribe
-          ? { subscription }
-          : {
-              entries: [
-                {
-                  id: "w1",
-                  name: "main",
-                  projectId: "p1",
-                  projectDisplayName: "Proj",
-                  pinnedAt: "now",
-                  diffStat: { additions: 3, deletions: 1 },
-                },
-              ],
-              pageInfo: { hasMore: false, nextCursor: null },
-            },
-      ),
-    };
-    const projects = {
-      list: vi.fn(async () => ({
-        projects: [
-          {
-            projectId: "p1",
-            projectKey: "k1",
-            projectCustomName: " Renamed ",
-            projectDisplayName: "Proj",
-          },
-        ],
-      })),
-      subscribe: vi.fn(() => () => {}),
-    };
-    hooks.paseo = { agents, workspaces, projects };
-    return { agents, workspaces };
-  }
-
-  test("loads the directory with background workspaces and observes them", async () => {
-    const { agents, workspaces } = connect();
-
-    useMonitorQuery("host");
-    const data = (await hooks.query?.queryFn()) as {
-      entries: unknown[];
-      directory: { workspaces: Map<string, unknown>; projects: Map<string, { name: string }> };
-      truncated: boolean;
-    };
-
-    expect(data.entries).toEqual([{ id: "a" }]);
-    expect(data.truncated).toBe(false);
-    expect(data.directory.workspaces.get("w1")).toMatchObject({
-      name: "main",
-      pinned: true,
-      additions: 3,
-      deletions: 1,
-    });
-    expect(data.directory.projects.get("p1")?.name).toBe("Renamed");
-
-    const cleanup = hooks.effects[0]?.();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(agents.list).toHaveBeenCalledWith({ subscribe: {}, includeBackground: true });
-    expect(workspaces.list).toHaveBeenCalledWith({ subscribe: {}, includeBackground: true });
-    if (typeof cleanup === "function") cleanup();
-  });
-});
-
 describe("useAllHostsMonitor", () => {
   function connect(entryId: string) {
     const release = vi.fn(async () => {});
@@ -232,15 +150,14 @@ describe("useAllHostsMonitor", () => {
       { serverId: "srv-b", label: "beta", status: "online" },
     ];
 
-    useAllHostsMonitor();
+    const monitor = useAllHostsMonitor();
     const data = (await hooks.query?.queryFn()) as {
-      hosts: Array<{ label: string }>;
       entries: Array<{ id: string; hostScope?: { label: string } }>;
       directory: { workspaces: Map<string, unknown>; projects: Map<string, { name: string }> };
       truncated: boolean;
     };
 
-    expect(data.hosts.map((host) => host.label)).toEqual(["alpha", "beta"]);
+    expect(monitor.hosts.map((host) => host.label)).toEqual(["alpha", "beta"]);
     expect(data.entries.map((entry) => entry.id).sort()).toEqual(["alpha-entry", "beta-entry"]);
     expect(data.entries.map((entry) => entry.hostScope?.label).sort()).toEqual(["alpha", "beta"]);
     expect(data.truncated).toBe(false);

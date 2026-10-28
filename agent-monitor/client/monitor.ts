@@ -286,7 +286,9 @@ export function sortEntries(entries: AgentEntry[], agentSort: AgentSort, hostId:
   });
 }
 
-function sortWorkspaces(workspaces: WorkspaceGroup[], options: GroupOptions): void {
+type SortOptions = Pick<MonitorSettings, "floatPinned" | "agentSort">;
+
+function sortWorkspaces(workspaces: WorkspaceGroup[], options: SortOptions): void {
   workspaces.sort((left, right) => {
     if (options.floatPinned && left.workspace.pinned !== right.workspace.pinned) {
       return left.workspace.pinned ? -1 : 1;
@@ -417,8 +419,12 @@ export function groupByProject(
 
   const result = [...projects.values()];
   for (const project of result) sortWorkspaces(project.workspaces, options);
+  sortProjects(result, options);
+  return result;
+}
 
-  return result.sort((left, right) => {
+function sortProjects(projects: ProjectGroup[], options: SortOptions): void {
+  projects.sort((left, right) => {
     if (options.floatPinned && left.pinned !== right.pinned) return left.pinned ? -1 : 1;
     if (options.agentSort === "title") return left.name.localeCompare(right.name);
     if (options.agentSort === "updated") {
@@ -515,7 +521,10 @@ export type HostedProjectGroups = {
  * share a base name become one group; its workspaces keep their host, which
  * the UI reads back off each workspace's entries.
  */
-export function mergeProjectGroupsAcrossHosts(all: readonly HostedProjectGroups[]): ProjectGroup[] {
+export function mergeProjectGroupsAcrossHosts(
+  all: readonly HostedProjectGroups[],
+  options: SortOptions,
+): ProjectGroup[] {
   const merged = new Map<string, ProjectGroup>();
   for (const { projects } of all) {
     for (const project of projects) {
@@ -534,5 +543,8 @@ export function mergeProjectGroupsAcrossHosts(all: readonly HostedProjectGroups[
       existing.pinned = existing.pinned || project.pinned;
     }
   }
-  return [...merged.values()].sort((left, right) => left.name.localeCompare(right.name));
+  const result = [...merged.values()];
+  for (const project of result) sortWorkspaces(project.workspaces, options);
+  sortProjects(result, options);
+  return result;
 }

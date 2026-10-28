@@ -179,7 +179,9 @@ export function AgentOverview(props: {
     <View style={styles.screen}>
       <Text style={styles.heading}>Agents</Text>
       <Text style={styles.sub}>
-        {monitor.isPending ? "Loading…" : `${items.length} active · ${attention} need attention`}
+        {monitor.isPending
+          ? "Loading…"
+          : `${items.length} active · ${attention.length} need attention`}
       </Text>
       {items.length === 0 && !monitor.isPending ? (
         <Text style={styles.empty}>No running agents right now.</Text>

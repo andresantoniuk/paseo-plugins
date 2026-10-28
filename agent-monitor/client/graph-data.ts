@@ -1,4 +1,4 @@
-import { getPaseoClient, usePaseo } from "@getpaseo/plugin/client";
+import { getPaseoClient, type usePaseo } from "@getpaseo/plugin/client";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import type { GraphEdge, InteractionData, SubagentInteraction } from "./graph";
@@ -157,25 +157,6 @@ export async function fetchInteractions(
   };
 }
 
-export function useInteractionGraph(
-  hostId: string,
-  entries: readonly AgentEntry[],
-  enabled: boolean,
-) {
-  const paseo = usePaseo();
-  const ids = entries
-    .map((entry) => entry.agent.id)
-    .sort()
-    .join(",");
-  return useQuery({
-    queryKey: ["agent-monitor", "interactions", hostId, ids],
-    queryFn: ({ signal }) => fetchInteractions(paseo, hostId, entries, signal),
-    enabled: enabled && entries.length > 0,
-    staleTime: 20_000,
-    refetchInterval: REFETCH_INTERVAL_MS,
-  });
-}
-
 /**
  * Merge per-host interaction data. Agent ids are daemon-scoped UUIDs, so edges
  * and subagent nodes concatenate; the per-host fetch keeps id-to-agent maps
@@ -244,7 +225,9 @@ export function useAllHostsInteractionGraph(
             const client = clientFor(group.host.serverId);
             if (!client) throw new Error(`host ${group.host.label} is not available`);
             return await fetchInteractions(client, group.host.serverId, group.entries, signal);
-          } catch {
+          } catch (error) {
+            // A cancelled sweep must reject, not resolve as all-unreadable.
+            if (signal.aborted) throw error;
             return {
               messagesByAgent: new Map<string, number>(),
               edges: [],
@@ -258,5 +241,6 @@ export function useAllHostsInteractionGraph(
     },
     enabled: enabled && byHost.length > 0,
     staleTime: 20_000,
+    refetchInterval: REFETCH_INTERVAL_MS,
   });
 }

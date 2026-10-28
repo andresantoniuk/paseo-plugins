@@ -1,4 +1,4 @@
-import { getPaseoClient, useHosts, usePaseo } from "@getpaseo/plugin/client";
+import { getPaseoClient, useHosts } from "@getpaseo/plugin/client";
 import { focusManager, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import {
@@ -63,7 +63,7 @@ export async function loadWorkspaces(paseo: PaseoApi): Promise<PaseoWorkspace[]>
   return workspaces;
 }
 
-export async function loadDirectory(paseo: PaseoApi): Promise<MonitorData> {
+async function loadDirectory(paseo: PaseoApi): Promise<MonitorData> {
   const [agents, workspaces, registry] = await Promise.all([
     loadAgents(paseo),
     loadWorkspaces(paseo),
@@ -95,41 +95,6 @@ export async function loadDirectory(paseo: PaseoApi): Promise<MonitorData> {
     directory: { workspaces: workspaceSummaries, projects },
     truncated: agents.truncated,
   };
-}
-
-/** The monitor's directory query. `select` derives a view without a second request. */
-export function useMonitorQuery<Selected = MonitorData>(
-  hostId: string,
-  select?: (data: MonitorData) => Selected,
-) {
-  const paseo = usePaseo();
-  const queryClient = useQueryClient();
-  const queryKey = useMemo(() => ["agent-monitor", "agents", hostId], [hostId]);
-  // One observation and backstop per connection and host, however many components read the data
-  // (the screen, the sidebar row, the popover). Keyed by the connection so a new one restarts it.
-  useEffect(
-    () =>
-      retainShared(paseo, queryKey.join("/"), () => {
-        // Hidden windows skip refreshes; React Query refetches the stale roster on refocus, which
-        // keeps the always-mounted sidebar row from polling a backgrounded app.
-        const invalidate = () => {
-          // cancelRefetch: false lets a slow in-flight load finish instead of restarting it each tick.
-          if (focusManager.isFocused()) {
-            void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
-          }
-        };
-        const invalidator = createDebouncedInvalidator(invalidate, REFRESH_DEBOUNCE_MS);
-        const stopObserving = observeDirectoryInvalidation(paseo, invalidator.invalidate);
-        const backstop = setInterval(invalidate, BACKSTOP_REFETCH_MS);
-        return () => {
-          clearInterval(backstop);
-          invalidator.cancel();
-          stopObserving();
-        };
-      }),
-    [paseo, queryClient, queryKey],
-  );
-  return useQuery({ queryKey, queryFn: () => loadDirectory(paseo), select });
 }
 
 export type MultiHostMonitor = {
@@ -188,8 +153,8 @@ export function mergeHostDirectories(
 
 /**
  * The monitor's multi-host directory query: one directory load per online
- * host, merged into a single entry list. Offline hosts are skipped; hosts
- * that fail keep the last good data while reporting their label.
+ * host, merged into a single entry list. Offline hosts are skipped; a host
+ * that fails is left out of the merged data and reported by label.
  */
 export function useAllHostsMonitor(): MultiHostMonitor {
   const hosts = useHosts();
@@ -207,7 +172,10 @@ export function useAllHostsMonitor(): MultiHostMonitor {
     [online],
   );
   // One observation and backstop per host client, however many components read
-  // the data. Keyed by connection so a reconnect restarts it.
+  // the data (the screen, the sidebar row, the popover). Keyed by connection so
+  // a reconnect restarts it. Hidden windows skip refreshes; React Query refetches
+  // the stale roster on refocus, which keeps the always-mounted sidebar row from
+  // polling a backgrounded app.
   useEffect(() => {
     const releases = online.map((host) => {
       const client = clientFor(host.serverId);
@@ -253,14 +221,10 @@ export function useAllHostsMonitor(): MultiHostMonitor {
       }
       const merged = mergeHostDirectories(loaded);
       return {
-        hosts: online,
         entries: merged.entries,
         directory: merged.directory,
         truncated: merged.truncated,
         failedHosts,
-        isPending: false,
-        isFetching: false,
-        refetchAll: () => {},
       };
     },
     staleTime: 20_000,

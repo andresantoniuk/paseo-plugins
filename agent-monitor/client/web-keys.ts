@@ -8,6 +8,9 @@ export type WebKeyTarget = {
 export type WebKeyEvent = {
   key: string;
   shiftKey: boolean;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
   preventDefault(): void;
   target: WebKeyTarget | null;
 };
@@ -31,12 +34,17 @@ export function isTyping(target: WebKeyTarget | null, key: string): boolean {
   );
 }
 
-/** Window keydown listener (web only). Re-subscribes when the handler changes. */
+/**
+ * Window keydown listener (web only). Re-subscribes when the handler changes.
+ * Ctrl, Meta and Alt chords belong to the browser and app (reload, copy), so
+ * they never reach the handler; Shift does (Shift+Tab).
+ */
 export function useKeyDown(handler: (event: WebKeyEvent) => void): void {
   useEffect(() => {
     const win = webWindow();
     if (!win) return;
     const onKeyDown = (event: WebKeyEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (isTyping(event.target, event.key)) return;
       handler(event);
     };

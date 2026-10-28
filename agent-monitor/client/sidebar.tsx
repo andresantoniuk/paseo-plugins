@@ -97,6 +97,7 @@ function AttentionPopover({ theme, layout, openScreen }: PluginPopoverProps) {
   const { items, summary } = useAttention();
   const monitor = useAllHostsMonitor();
   const overview = useMemo(() => overviewItems(monitor.entries), [monitor.entries]);
+  const shown = useMemo(() => overview.slice(0, OVERVIEW_LIMIT), [overview]);
   const [selected, setSelected] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -104,41 +105,41 @@ function AttentionPopover({ theme, layout, openScreen }: PluginPopoverProps) {
     return () => clearInterval(clock);
   }, []);
   useEffect(() => {
-    if (selected >= overview.length) setSelected(overview.length > 0 ? 0 : -1);
-  }, [overview.length, selected]);
+    if (selected >= shown.length) setSelected(shown.length > 0 ? 0 : -1);
+  }, [shown.length, selected]);
   useKeyDown(
     useCallback(
       (event: WebKeyEvent) => {
         // The app dismisses the popover on Escape; never fight it here.
         if (event.key === "Escape") return;
         if (event.key === "Enter") {
-          const item = overview[selected];
+          const item = shown[selected];
           if (item) openOverlayItem(openScreen, item);
           return;
         }
         if (event.key === "Tab") {
           event.preventDefault();
-          setSelected((index) => moveSelection(index, overview.length, event.shiftKey ? -1 : 1));
+          setSelected((index) => moveSelection(index, shown.length, event.shiftKey ? -1 : 1));
           return;
         }
         if (event.key === "ArrowDown" || event.key === "ArrowRight") {
           event.preventDefault();
-          setSelected((index) => moveSelection(index, overview.length, 1));
+          setSelected((index) => moveSelection(index, shown.length, 1));
           return;
         }
         if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
           event.preventDefault();
-          setSelected((index) => moveSelection(index, overview.length, -1));
+          setSelected((index) => moveSelection(index, shown.length, -1));
           return;
         }
         const jump = digitIndex(event.key);
-        if (jump !== null && jump < overview.length) {
-          const item = overview[jump];
+        if (jump !== null && jump < shown.length) {
+          const item = shown[jump];
           setSelected(jump);
           if (item) openOverlayItem(openScreen, item);
         }
       },
-      [overview, selected, openScreen],
+      [shown, selected, openScreen],
     ),
   );
   const styles = useMemo(
@@ -188,7 +189,6 @@ function AttentionPopover({ theme, layout, openScreen }: PluginPopoverProps) {
     }),
     [theme, layout.compact],
   );
-  const shown = overview.slice(0, OVERVIEW_LIMIT);
   const hidden = overview.length - shown.length;
   const runningCount = overview.filter((item) => !item.needsAttention).length;
   let heading = "Checking agents…";

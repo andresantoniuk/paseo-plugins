@@ -2,6 +2,7 @@ import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanResponder, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { createPressGuard, isDrag } from "./gesture";
 import {
   buildClusterBoxes,
   buildGraph,
@@ -21,6 +22,7 @@ import {
   hostOf,
   placement,
 } from "./monitor";
+import { onWheel, type WheelInput } from "./web";
 
 type GraphViewProps = {
   entries: AgentEntry[];
@@ -58,6 +60,8 @@ function statusColor(node: GraphNode, theme: PluginSurfaceProps["theme"]): strin
   return theme.colors.foregroundMuted;
 }
 
+const CONTROL_MIN_COMPACT = 44;
+
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
@@ -69,18 +73,8 @@ export function AgentGraph({
   loading,
   theme,
   navigation,
+  compact,
 }: GraphViewProps) {
-  // Deep link from the sidebar quick access: select the requested card once.
-  // Later selections belong to the user. The filter-reset effect below also
-  // runs on mount, so it must skip the first run: otherwise it wipes the deep
-  // link before it ever renders.
-  const filtersMounted = useRef(false);
-  useEffect(() => {
-    if (focusedAgentId) {
-      setSelectedEdge(null);
-      setSelectedId(focusedAgentId);
-    }
-  }, [focusedAgentId]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [hostFilter, setHostFilter] = useState<string | null>(null);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
@@ -94,12 +88,15 @@ export function AgentGraph({
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
-  const canvasRef = useRef<View>(null);
+  const [canvas, setCanvas] = useState<View | null>(null);
   const panRef = useRef(pan);
   const panStart = useRef({ x: 0, y: 0 });
-  const canvasMoved = useRef(false);
+  const canvasGuard = useMemo(createPressGuard, []);
   panRef.current = pan;
 
+  // The filter reset also runs on mount; skip that run so a deep-link
+  // selection made on the same commit survives.
+  const filtersMounted = useRef(false);
   useEffect(() => {
     if (!filtersMounted.current) {
       filtersMounted.current = true;
@@ -110,7 +107,13 @@ export function AgentGraph({
     setSelectedEdge(null);
   }, [hostFilter, projectFilter, workspaceFilter, providerFilter, showSubagents, connectedOnly]);
 
-  const entryHosts = useMemo(() => {
+  useEffect(() => {
+    if (!focusedAgentId) return;
+    setSelectedEdge(null);
+    setSelectedId(focusedAgentId);
+  }, [focusedAgentId]);
+
+  const hostChoices = useMemo(() => {
     const byId = new Map<string, HostScope>();
     for (const entry of entries) {
       const scope = hostOf(entry);
@@ -118,7 +121,6 @@ export function AgentGraph({
     }
     return [...byId.values()].sort((left, right) => left.label.localeCompare(right.label));
   }, [entries]);
-  const hostChoices = entryHosts.length > 0 ? entryHosts : [...hosts];
 
   const projectKeys = useMemo(() => {
     const map = new Map<string, string>();
@@ -192,11 +194,8 @@ export function AgentGraph({
     [manual],
   );
 
-  // The container hugs its cards wherever they are, dragged or not: the box is
-  // the bounding box of the current card positions plus padding. Boxes are
-  // translucent on purpose, so overlapping them while dragging reads as
-  // stacked glass instead of broken lanes. The header pill keeps each label
-  // readable over whatever sits behind it.
+  // The halo follows the cards, so dragging a node never leaves its group
+  // visually behind. It grows and shrinks with the members.
   const clusterBoxes = useMemo(
     () => buildClusterBoxes(visibleNodes, positionOf),
     [positionOf, visibleNodes],
@@ -233,9 +232,10 @@ export function AgentGraph({
     return edge ? { edge, from, to } : null;
   }, [selectedEdge, visibleById, visibleEdges]);
 
+  const selected = selectedId ? (visibleById.get(selectedId) ?? null) : null;
+
   useEffect(() => {
-    // Only clear once the layout has nodes: on first mount the entries may
-    // still be loading, and a deep link would lose its selection otherwise.
+    // Wait for nodes: a deep-link selection made while entries load must survive.
     if (visibleById.size === 0) return;
     if (selectedId && !visibleById.has(selectedId)) setSelectedId(null);
     if (
@@ -255,25 +255,10 @@ export function AgentGraph({
     setSelectedEdge(null);
   }, []);
 
-  // Tapping a card opens its agent straight away; there is no intermediate
-  // details panel. Dragging still moves the card (the responder distinguishes).
-  // Provider subagents and hosts without navigation fall back to selecting the
-  // card, so the tap still highlights its cluster and edges.
-  const openNode = useCallback(
-    (id: string) => {
-      const node = visibleById.get(id);
-      if (node?.agentId && navigation) {
-        navigation.openAgent({
-          agentId: node.agentId,
-          ...(node.host ? { serverId: node.host.serverId } : null),
-        });
-        return;
-      }
-      setSelectedEdge(null);
-      setSelectedId((current) => (current === id ? null : id));
-    },
-    [navigation, visibleById],
-  );
+  const selectNode = useCallback((id: string) => {
+    setSelectedEdge(null);
+    setSelectedId((current) => (current === id ? null : id));
+  }, []);
 
   const selectEdge = useCallback((from: string, to: string) => {
     setSelectedId(null);
@@ -325,58 +310,36 @@ export function AgentGraph({
   }, []);
 
   const handleWheel = useCallback(
-    (event: unknown) => {
-      const wheel = event as {
-        preventDefault?: () => void;
-        deltaY?: number;
-        ctrlKey?: boolean;
-      };
-      wheel.preventDefault?.();
-      const delta = Number(wheel.deltaY ?? 0);
+    (event: WheelInput) => {
+      event.preventDefault?.();
+      const delta = Number(event.deltaY ?? 0);
       if (!Number.isFinite(delta) || delta === 0) return;
       // Trackpad pinch arrives as a ctrl+wheel with small deltas.
-      const intensity = wheel.ctrlKey ? 0.012 : 0.003;
+      const intensity = event.ctrlKey ? 0.012 : 0.003;
       zoomBy(Math.exp(-delta * intensity));
     },
     [zoomBy],
   );
 
-  useEffect(() => {
-    if (Platform.OS !== "web") return;
-    const node = canvasRef.current as unknown as {
-      addEventListener?: (
-        name: string,
-        handler: (event: unknown) => void,
-        options?: unknown,
-      ) => void;
-      removeEventListener?: (name: string, handler: (event: unknown) => void) => void;
-    } | null;
-    if (!node?.addEventListener || !node.removeEventListener) return;
-    const listener = (event: unknown) => handleWheel(event);
-    node.addEventListener("wheel", listener, { passive: false });
-    return () => node.removeEventListener?.("wheel", listener);
-  }, [handleWheel]);
+  // Bound to the live canvas element, not a ref read once: the canvas unmounts
+  // while no agents match and comes back as a new element.
+  useEffect(() => onWheel(canvas, handleWheel), [canvas, handleWheel]);
 
   const canvasPan = useMemo(
     () =>
       PanResponder.create({
-        // Claim taps too, so a click on empty canvas clears the focus.
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_event, gesture) =>
-          Math.abs(gesture.dx) > 3 || Math.abs(gesture.dy) > 3,
+        // Only motion past the drag threshold pans; taps reach the Pressable.
+        onMoveShouldSetPanResponderCapture: (_event, gesture) => isDrag(gesture.dx, gesture.dy),
+        onMoveShouldSetPanResponder: (_event, gesture) => isDrag(gesture.dx, gesture.dy),
         onPanResponderGrant: () => {
           panStart.current = panRef.current;
-          canvasMoved.current = false;
+          canvasGuard.markDragged();
         },
         onPanResponderMove: (_event, gesture) => {
-          if (Math.abs(gesture.dx) > 3 || Math.abs(gesture.dy) > 3) canvasMoved.current = true;
           setPan({ x: panStart.current.x + gesture.dx, y: panStart.current.y + gesture.dy });
         },
-        onPanResponderRelease: () => {
-          if (!canvasMoved.current) clearSelection();
-        },
       }),
-    [clearSelection],
+    [canvasGuard],
   );
 
   const activeFilterCount =
@@ -386,6 +349,15 @@ export function AgentGraph({
     (providerFilter ? 1 : 0) +
     (showSubagents ? 0 : 1) +
     (connectedOnly ? 1 : 0);
+
+  const touchTarget = compact
+    ? ({
+        minWidth: CONTROL_MIN_COMPACT,
+        minHeight: CONTROL_MIN_COMPACT,
+        alignItems: "center",
+        justifyContent: "center",
+      } as const)
+    : null;
 
   if (entries.length === 0) {
     return (
@@ -402,7 +374,7 @@ export function AgentGraph({
       <View
         style={{
           borderBottomWidth: 1,
-          borderBottomColor: `${theme.colors.border}66`,
+          borderBottomColor: theme.colors.border,
           paddingVertical: 7,
           gap: 6,
         }}
@@ -420,11 +392,12 @@ export function AgentGraph({
             accessibilityRole="button"
             accessibilityLabel={filtersOpen ? "Hide filters" : "Show filters"}
             onPress={() => setFiltersOpen((value) => !value)}
+            accessibilityState={{ expanded: filtersOpen }}
             style={{
               flexDirection: "row",
               alignItems: "center",
               gap: 4,
-              minHeight: 26,
+              minHeight: compact ? CONTROL_MIN_COMPACT : 26,
               paddingHorizontal: 8,
               borderRadius: 6,
               borderWidth: 1,
@@ -441,13 +414,25 @@ export function AgentGraph({
               Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
             </Text>
           </Pressable>
-          <Chip label="Fit" active={false} theme={theme} onPress={fit} />
-          <ZoomButton label="−" theme={theme} onPress={() => zoomBy(1 / 1.2)} />
+          <Chip
+            label="Fit"
+            active={false}
+            toggle={false}
+            compact={compact}
+            theme={theme}
+            onPress={fit}
+          />
+          <ZoomButton label="−" compact={compact} theme={theme} onPress={() => zoomBy(1 / 1.2)} />
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10, minWidth: 34 }}>
             {Math.round(scale * 100)}%
           </Text>
-          <ZoomButton label="+" theme={theme} onPress={() => zoomBy(1.2)} />
-          <Pressable onPress={resetView} style={{ paddingHorizontal: 6, paddingVertical: 4 }}>
+          <ZoomButton label="+" compact={compact} theme={theme} onPress={() => zoomBy(1.2)} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Reset graph view"
+            onPress={resetView}
+            style={{ paddingHorizontal: 6, paddingVertical: 4, ...touchTarget }}
+          >
             <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>Reset</Text>
           </Pressable>
           {loading ? (
@@ -472,14 +457,17 @@ export function AgentGraph({
                   label="All hosts"
                   active={hostFilter === null}
                   theme={theme}
+                  compact={compact}
                   onPress={() => setHostFilter(null)}
                 />
                 {hostChoices.map((host) => (
                   <Chip
                     key={host.serverId}
                     label={host.label}
+                    color={hostColor(host)}
                     active={hostFilter === host.serverId}
                     theme={theme}
+                    compact={compact}
                     onPress={() =>
                       setHostFilter(hostFilter === host.serverId ? null : host.serverId)
                     }
@@ -496,6 +484,7 @@ export function AgentGraph({
                 label="All projects"
                 active={projectFilter === null}
                 theme={theme}
+                compact={compact}
                 onPress={() => setProjectFilter(null)}
               />
               {projects.map((project) => (
@@ -505,6 +494,7 @@ export function AgentGraph({
                   color={PALETTE[colorIndex(projectKeys.get(project) ?? project)]}
                   active={projectFilter === project}
                   theme={theme}
+                  compact={compact}
                   onPress={() => setProjectFilter(projectFilter === project ? null : project)}
                 />
               ))}
@@ -518,6 +508,7 @@ export function AgentGraph({
                 label="All workspaces"
                 active={workspaceFilter === null}
                 theme={theme}
+                compact={compact}
                 onPress={() => setWorkspaceFilter(null)}
               />
               {workspaces.map((workspace) => (
@@ -526,6 +517,7 @@ export function AgentGraph({
                   label={workspace}
                   active={workspaceFilter === workspace}
                   theme={theme}
+                  compact={compact}
                   onPress={() =>
                     setWorkspaceFilter(workspaceFilter === workspace ? null : workspace)
                   }
@@ -545,6 +537,7 @@ export function AgentGraph({
                 label="All providers"
                 active={providerFilter === null}
                 theme={theme}
+                compact={compact}
                 onPress={() => setProviderFilter(null)}
               />
               {providers.map((provider) => (
@@ -553,6 +546,7 @@ export function AgentGraph({
                   label={provider}
                   active={providerFilter === provider}
                   theme={theme}
+                  compact={compact}
                   onPress={() => setProviderFilter(providerFilter === provider ? null : provider)}
                 />
               ))}
@@ -560,12 +554,14 @@ export function AgentGraph({
                 label={`Subagents ${subagentCount}`}
                 active={showSubagents}
                 theme={theme}
+                compact={compact}
                 onPress={() => setShowSubagents((value) => !value)}
               />
               <Chip
                 label="Connected only"
                 active={connectedOnly}
                 theme={theme}
+                compact={compact}
                 onPress={() => setConnectedOnly((value) => !value)}
               />
             </View>
@@ -581,12 +577,23 @@ export function AgentGraph({
             height: event.nativeEvent.layout.height,
           })
         }
-        ref={canvasRef}
+        ref={setCanvas}
       >
         <View
           style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0 }}
           {...canvasPan.panHandlers}
-        />
+        >
+          {/* A tap on empty canvas clears the focus; a drag pans instead. */}
+          <Pressable
+            accessible={false}
+            focusable={false}
+            onPressIn={canvasGuard.reset}
+            onPress={() => {
+              if (canvasGuard.consume()) clearSelection();
+            }}
+            style={{ flex: 1 }}
+          />
+        </View>
         <View
           style={{
             width: layout.width,
@@ -611,38 +618,25 @@ export function AgentGraph({
                   width: cluster.width,
                   height: cluster.height,
                   borderRadius: 16,
-                  overflow: "hidden",
-                  backgroundColor: `${color}14`,
+                  backgroundColor: color + "10",
                   borderWidth: 1,
-                  borderColor: `${color}40`,
+                  borderColor: color + "33",
                   opacity: clusterDimmed ? 0.18 : 1,
                 }}
               >
-                <View
+                <Text
                   style={{
                     position: "absolute",
                     left: 12,
                     top: 8,
-                    maxWidth: cluster.width - 24,
-                    paddingHorizontal: 7,
-                    paddingVertical: 2,
-                    borderRadius: 7,
-                    backgroundColor: `${theme.colors.surface0}E6`,
+                    color: theme.colors.foregroundMuted,
+                    fontSize: 11,
+                    fontWeight: "700",
                   }}
                 >
-                  <Text
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                    style={{
-                      color,
-                      fontSize: 11,
-                      fontWeight: "700",
-                    }}
-                  >
-                    {cluster.name} · {cluster.count}
-                    {cluster.hosts.length > 1 ? ` · ${cluster.hosts.join(", ")}` : ""}
-                  </Text>
-                </View>
+                  {cluster.name} · {cluster.count}
+                  {cluster.hosts.length > 1 ? ` · ${cluster.hosts.join(", ")}` : ""}
+                </Text>
               </View>
             );
           })}
@@ -679,8 +673,8 @@ export function AgentGraph({
                 ? theme.colors.accent
                 : edge.kind === "subagent"
                   ? theme.colors.statusWarning
-                  : theme.colors.border;
-            const hitHeight = Math.max(12, thickness);
+                  : theme.colors.foregroundMuted;
+            const hitHeight = Math.max(compact ? 24 / scale : 12, thickness);
             return (
               <Pressable
                 key={`${edge.from}>${edge.to}`}
@@ -736,6 +730,7 @@ export function AgentGraph({
                 accessibilityRole="button"
                 accessibilityLabel={`Select connection from ${from.title} to ${to.title}`}
                 onPress={() => selectEdge(edge.from, edge.to)}
+                hitSlop={compact ? 14 : 0}
                 style={{
                   position: "absolute",
                   left: x - 12,
@@ -746,7 +741,7 @@ export function AgentGraph({
                   borderRadius: 8,
                   backgroundColor: theme.colors.surface0,
                   borderWidth: 1,
-                  borderColor: edgeSelected ? theme.colors.accent : `${theme.colors.border}66`,
+                  borderColor: edgeSelected ? theme.colors.accent : theme.colors.border,
                   alignItems: "center",
                   opacity: active ? 1 : 0.25,
                   ...(Platform.OS === "web" ? { cursor: "pointer" } : null),
@@ -770,23 +765,104 @@ export function AgentGraph({
             const edgeEndpoint =
               selectedEdge !== null &&
               (selectedEdge.from === node.id || selectedEdge.to === node.id);
-            const lifted = manual[node.id] !== undefined || selectedId === node.id;
             return (
               <GraphNodeView
                 key={node.id}
                 node={node}
+                host={hostChoices.length > 1 ? node.host : null}
                 position={position}
                 scale={scale}
                 dimmed={dimmed}
-                lifted={lifted}
                 selected={selectedId === node.id || edgeEndpoint}
                 theme={theme}
-                onOpen={openNode}
+                onSelect={selectNode}
                 onMove={moveNode}
               />
             );
           })}
         </View>
+
+        {selected ? (
+          <View
+            style={{
+              position: "absolute",
+              left: 16,
+              right: 16,
+              bottom: 16,
+              backgroundColor: theme.colors.surface1,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              borderRadius: 10,
+              padding: 12,
+              gap: 3,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <View
+                style={{
+                  width: 9,
+                  height: 9,
+                  borderRadius: 5,
+                  backgroundColor: statusColor(selected, theme),
+                }}
+              />
+              <Text
+                numberOfLines={1}
+                style={{ flex: 1, color: theme.colors.foreground, fontSize: 13, fontWeight: "700" }}
+              >
+                {selected.title}
+              </Text>
+              <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+                {selected.kind}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close graph details"
+                onPress={() => setSelectedId(null)}
+                style={{ padding: 4, ...touchTarget }}
+              >
+                <Icon name="X" size={14} color={theme.colors.foregroundMuted} />
+              </Pressable>
+            </View>
+            <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
+              {selected.host ? `${selected.host.label} · ` : ""}
+              {selected.repo}
+            </Text>
+            <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
+              {selected.meta} · {selected.messageCount} messages
+              {selected.childCount > 0 ? ` · ${selected.childCount} children` : ""}
+            </Text>
+            {selected.agentId ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Open agent ${selected.title}`}
+                onPress={() =>
+                  navigation?.openAgent({
+                    agentId: selected.agentId ?? "",
+                    ...(selected.host ? { serverId: selected.host.serverId } : null),
+                  })
+                }
+                style={{
+                  alignSelf: "flex-start",
+                  marginTop: 4,
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                  borderRadius: 6,
+                  backgroundColor: theme.colors.accent,
+                  ...(compact
+                    ? { minHeight: CONTROL_MIN_COMPACT, justifyContent: "center" }
+                    : null),
+                }}
+              >
+                <Text
+                  style={{ color: theme.colors.accentForeground, fontSize: 11, fontWeight: "600" }}
+                >
+                  Open agent
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
 
         {selectedEdgeNodes ? (
           <View
@@ -797,7 +873,7 @@ export function AgentGraph({
               bottom: 16,
               backgroundColor: theme.colors.surface1,
               borderWidth: 1,
-              borderColor: `${theme.colors.accent}88`,
+              borderColor: theme.colors.accent,
               borderRadius: 10,
               padding: 12,
               gap: 3,
@@ -827,7 +903,7 @@ export function AgentGraph({
                 accessibilityRole="button"
                 accessibilityLabel="Close connection details"
                 onPress={() => setSelectedEdge(null)}
-                style={{ padding: 4 }}
+                style={{ padding: 4, ...touchTarget }}
               >
                 <Icon name="X" size={14} color={theme.colors.foregroundMuted} />
               </Pressable>
@@ -845,13 +921,18 @@ export function AgentGraph({
 function Chip({
   label,
   active,
+  toggle = true,
   color,
+  compact,
   theme,
   onPress,
 }: {
   label: string;
   active: boolean;
+  /** False for one-shot actions, which have no selected state to announce. */
+  toggle?: boolean;
   color?: string;
+  compact: boolean;
   theme: PluginSurfaceProps["theme"];
   onPress: () => void;
 }) {
@@ -859,13 +940,14 @@ function Chip({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={toggle ? { selected: active } : undefined}
       onPress={onPress}
       style={{
         flexDirection: "row",
         alignItems: "center",
         gap: 4,
         maxWidth: 190,
-        minHeight: 26,
+        minHeight: compact ? CONTROL_MIN_COMPACT : 26,
         paddingHorizontal: 8,
         borderRadius: 6,
         borderWidth: 1,
@@ -891,21 +973,24 @@ function Chip({
 
 function ZoomButton({
   label,
+  compact,
   theme,
   onPress,
 }: {
   label: string;
+  compact: boolean;
   theme: PluginSurfaceProps["theme"];
   onPress: () => void;
 }) {
+  const size = compact ? CONTROL_MIN_COMPACT : 24;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label === "+" ? "Zoom in" : "Zoom out"}
       onPress={onPress}
       style={{
-        width: 24,
-        height: 24,
+        width: size,
+        height: size,
         borderRadius: 6,
         borderWidth: 1,
         borderColor: theme.colors.border,
@@ -920,135 +1005,137 @@ function ZoomButton({
 
 function GraphNodeView({
   node,
+  host,
   position,
   scale,
   dimmed,
-  lifted,
   selected,
   theme,
-  onOpen,
+  onSelect,
   onMove,
 }: {
   node: GraphNode;
+  /** Shown as a pill when the graph spans more than one host. */
+  host: HostScope | null;
   position: { x: number; y: number };
   scale: number;
   dimmed: boolean;
-  lifted: boolean;
   selected: boolean;
   theme: PluginSurfaceProps["theme"];
-  onOpen: (id: string) => void;
+  onSelect: (id: string) => void;
   onMove: (id: string, position: { x: number; y: number }) => void;
 }) {
   const start = useRef({ x: 0, y: 0 });
-  const moved = useRef(false);
   const positionRef = useRef(position);
   const scaleRef = useRef(scale);
+  const guard = useMemo(createPressGuard, []);
   positionRef.current = position;
   scaleRef.current = scale;
 
+  // The responder only claims motion past the drag threshold (stealing it from
+  // the Pressable), so taps, Enter, Space and screen-reader activation stay
+  // native presses. dx/dy are measured from the grant, which is also when the
+  // card's origin is captured.
   const responder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_event, gesture) =>
-          Math.abs(gesture.dx) > 3 || Math.abs(gesture.dy) > 3,
+        onMoveShouldSetPanResponderCapture: (_event, gesture) => isDrag(gesture.dx, gesture.dy),
+        onMoveShouldSetPanResponder: (_event, gesture) => isDrag(gesture.dx, gesture.dy),
         onPanResponderGrant: () => {
           start.current = positionRef.current;
-          moved.current = false;
+          guard.markDragged();
         },
         onPanResponderMove: (_event, gesture) => {
-          if (Math.abs(gesture.dx) <= 3 && Math.abs(gesture.dy) <= 3) return;
-          moved.current = true;
-          const next = {
+          onMove(node.id, {
             x: start.current.x + gesture.dx / scaleRef.current,
             y: start.current.y + gesture.dy / scaleRef.current,
-          };
-          onMove(node.id, next);
-        },
-        onPanResponderRelease: () => {
-          if (!moved.current) onOpen(node.id);
+          });
         },
       }),
-    [node.id, onOpen, onMove],
+    [guard, node.id, onMove],
   );
 
   const border = selected
     ? theme.colors.accent
     : node.kind === "subagent"
-      ? `${theme.colors.statusWarning}88`
-      : `${PALETTE[colorIndex(node.colorKey)]}88`;
+      ? theme.colors.statusWarning
+      : PALETTE[colorIndex(node.colorKey)] + "88";
 
   return (
     <View
       {...responder.panHandlers}
-      accessibilityRole="button"
-      accessibilityLabel={node.agentId ? `Open agent ${node.title}` : `Select ${node.title}`}
-      style={{
-        position: "absolute",
-        left: position.x,
-        top: position.y,
-        width: NODE_WIDTH,
-        zIndex: lifted ? 10 : 1,
-        minHeight: NODE_HEIGHT,
-        padding: 9,
-        borderRadius: 10,
-        borderWidth: selected ? 2 : 1,
-        borderStyle: node.kind === "subagent" ? "dashed" : "solid",
-        borderColor: border,
-        backgroundColor: theme.colors.surface1,
-        opacity: dimmed ? 0.12 : 1,
-        gap: 2,
-      }}
+      style={{ position: "absolute", left: position.x, top: position.y, width: NODE_WIDTH }}
     >
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-        <View
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: 4,
-            backgroundColor: statusColor(node, theme),
-          }}
-        />
-        <Text
-          numberOfLines={1}
-          ellipsizeMode="tail"
-          style={{ flex: 1, color: theme.colors.foreground, fontSize: 12, fontWeight: "700" }}
-        >
-          {node.title}
-        </Text>
-        {node.host ? (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Select ${node.title}`}
+        accessibilityState={{ selected }}
+        onPressIn={guard.reset}
+        onPress={() => {
+          if (guard.consume()) onSelect(node.id);
+        }}
+        style={{
+          minHeight: NODE_HEIGHT,
+          padding: 9,
+          borderRadius: 10,
+          borderWidth: selected ? 2 : 1,
+          borderStyle: node.kind === "subagent" ? "dashed" : "solid",
+          borderColor: border,
+          backgroundColor: theme.colors.surface1,
+          opacity: dimmed ? 0.12 : 1,
+          gap: 2,
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <View
-            accessibilityLabel={`Host ${node.host.label}`}
             style={{
-              paddingHorizontal: 6,
-              paddingVertical: 1,
-              borderRadius: 7,
-              borderWidth: 1,
-              borderColor: `${hostColor(node.host)}66`,
-              backgroundColor: `${hostColor(node.host)}26`,
+              width: 8,
+              height: 8,
+              borderRadius: 4,
+              backgroundColor: statusColor(node, theme),
             }}
+          />
+          <Text
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            style={{ flex: 1, color: theme.colors.foreground, fontSize: 12, fontWeight: "700" }}
           >
-            <Text style={{ color: hostColor(node.host), fontSize: 9, fontWeight: "700" }}>
-              {node.host.label}
-            </Text>
-          </View>
-        ) : null}
-        {node.kind === "subagent" ? (
-          <Icon name="Bot" size={12} color={theme.colors.statusWarning} />
-        ) : null}
-      </View>
-      <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-        {node.repo}
-      </Text>
-      <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-        {node.meta}
-        {node.messageCount > 0 ? ` · ${node.messageCount} msgs` : ""}
-      </Text>
-      {node.childCount > 0 ? (
-        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>
-          {node.childCount} {node.childCount === 1 ? "child" : "children"}
+            {node.title}
+          </Text>
+          {host ? (
+            <View
+              accessibilityLabel={`Host ${host.label}`}
+              style={{
+                paddingHorizontal: 6,
+                paddingVertical: 1,
+                borderRadius: 7,
+                borderWidth: 1,
+                borderColor: `${hostColor(host)}66`,
+                backgroundColor: `${hostColor(host)}26`,
+              }}
+            >
+              <Text style={{ color: hostColor(host), fontSize: 9, fontWeight: "700" }}>
+                {host.label}
+              </Text>
+            </View>
+          ) : null}
+          {node.kind === "subagent" ? (
+            <Icon name="Bot" size={12} color={theme.colors.statusWarning} />
+          ) : null}
+        </View>
+        <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+          {node.repo}
         </Text>
-      ) : null}
+        <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+          {node.meta}
+          {node.messageCount > 0 ? ` · ${node.messageCount} msgs` : ""}
+        </Text>
+        {node.childCount > 0 ? (
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 9 }}>
+            {node.childCount} {node.childCount === 1 ? "child" : "children"}
+          </Text>
+        ) : null}
+      </Pressable>
     </View>
   );
 }

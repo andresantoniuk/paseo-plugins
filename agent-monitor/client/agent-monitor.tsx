@@ -396,10 +396,16 @@ function AgentMonitorRoster({
     }));
     return {
       kind: "project" as const,
-      projects: mergeProjectGroupsAcrossHosts(perHost),
+      projects: mergeProjectGroupsAcrossHosts(perHost, settings),
     };
   }, [directory, hosts, settings, visibleEntries]);
-  const interactions = useAllHostsInteractionGraph(hosts, visibleEntries, view === "graph");
+  // Full roster, not visibleEntries: the graph reads timelines and must not rescan per keystroke.
+  const interactions = useAllHostsInteractionGraph(hosts, entries, view === "graph");
+  const refetchInteractions = interactions.refetch;
+  const refresh = useCallback(() => {
+    monitor.refetchAll();
+    if (view === "graph" && entries.length > 0) void refetchInteractions();
+  }, [entries.length, monitor.refetchAll, refetchInteractions, view]);
 
   const styles = useMemo(() => {
     const gutter = layout.compact ? 12 : 20;
@@ -932,7 +938,7 @@ function AgentMonitorRoster({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Refresh agents"
-            onPress={() => monitor.refetchAll()}
+            onPress={refresh}
             style={styles.refreshAction}
           >
             <Text style={styles.actionText}>Refresh</Text>

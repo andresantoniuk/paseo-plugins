@@ -365,16 +365,23 @@ describe("mergeProjectGroupsAcrossHosts", () => {
         HOST_BETA,
       ),
     ];
-    const merged = mergeProjectGroupsAcrossHosts([
-      {
-        host: HOST_ALPHA,
-        projects: groupByProject(alphaEntries, directoryFor("prj-alpha", "ACME · alpha"), OPTIONS),
-      },
-      {
-        host: HOST_BETA,
-        projects: groupByProject(betaEntries, directoryFor("prj-beta", "ACME"), OPTIONS),
-      },
-    ]);
+    const merged = mergeProjectGroupsAcrossHosts(
+      [
+        {
+          host: HOST_ALPHA,
+          projects: groupByProject(
+            alphaEntries,
+            directoryFor("prj-alpha", "ACME · alpha"),
+            OPTIONS,
+          ),
+        },
+        {
+          host: HOST_BETA,
+          projects: groupByProject(betaEntries, directoryFor("prj-beta", "ACME"), OPTIONS),
+        },
+      ],
+      OPTIONS,
+    );
 
     expect(merged).toHaveLength(1);
     expect(merged[0].name).toBe("ACME");
@@ -384,32 +391,70 @@ describe("mergeProjectGroupsAcrossHosts", () => {
   });
 
   test("keeps distinct projects apart and sorts by name", () => {
-    const merged = mergeProjectGroupsAcrossHosts([
-      {
-        host: HOST_ALPHA,
-        projects: groupByProject(
-          [entry({ id: "m1", workspaceId: "ws-infra" }, { projectName: "infra" })],
-          {
-            workspaces: new Map([["ws-infra", workspace("ws-infra", "infra", "prj-infra")]]),
-            projects: indexProjects([{ id: "prj-infra", name: "infra" }]),
-          },
-          OPTIONS,
-        ),
-      },
-      {
-        host: HOST_BETA,
-        projects: groupByProject(
-          [entry({ id: "d1", workspaceId: "ws-intel" }, { projectName: "intel" })],
-          {
-            workspaces: new Map([["ws-intel", workspace("ws-intel", "intel", "prj-intel")]]),
-            projects: indexProjects([{ id: "prj-intel", name: "intel" }]),
-          },
-          OPTIONS,
-        ),
-      },
-    ]);
+    const merged = mergeProjectGroupsAcrossHosts(
+      [
+        {
+          host: HOST_ALPHA,
+          projects: groupByProject(
+            [entry({ id: "m1", workspaceId: "ws-infra" }, { projectName: "infra" })],
+            {
+              workspaces: new Map([["ws-infra", workspace("ws-infra", "infra", "prj-infra")]]),
+              projects: indexProjects([{ id: "prj-infra", name: "infra" }]),
+            },
+            OPTIONS,
+          ),
+        },
+        {
+          host: HOST_BETA,
+          projects: groupByProject(
+            [entry({ id: "d1", workspaceId: "ws-intel" }, { projectName: "intel" })],
+            {
+              workspaces: new Map([["ws-intel", workspace("ws-intel", "intel", "prj-intel")]]),
+              projects: indexProjects([{ id: "prj-intel", name: "intel" }]),
+            },
+            OPTIONS,
+          ),
+        },
+      ],
+      OPTIONS,
+    );
 
     expect(merged.map((project) => project.name)).toEqual(["infra", "intel"]);
+  });
+
+  test("orders merged projects by the user's sort, floating pinned ones first", () => {
+    const pinnedOptions: GroupOptions = { ...OPTIONS, floatPinned: true };
+    const merged = mergeProjectGroupsAcrossHosts(
+      [
+        {
+          host: HOST_ALPHA,
+          projects: groupByProject(
+            [entry({ id: "m1", workspaceId: "ws-infra" }, { projectName: "infra" })],
+            {
+              workspaces: new Map([["ws-infra", workspace("ws-infra", "infra", "prj-infra")]]),
+              projects: indexProjects([{ id: "prj-infra", name: "infra" }]),
+            },
+            pinnedOptions,
+          ),
+        },
+        {
+          host: HOST_BETA,
+          projects: groupByProject(
+            [entry({ id: "d1", workspaceId: "ws-intel" }, { projectName: "intel" })],
+            {
+              workspaces: new Map([
+                ["ws-intel", { ...workspace("ws-intel", "intel", "prj-intel"), pinned: true }],
+              ]),
+              projects: indexProjects([{ id: "prj-intel", name: "intel" }]),
+            },
+            { ...pinnedOptions, hostId: HOST_BETA.serverId },
+          ),
+        },
+      ],
+      pinnedOptions,
+    );
+
+    expect(merged.map((project) => project.name)).toEqual(["intel", "infra"]);
   });
 });
 
