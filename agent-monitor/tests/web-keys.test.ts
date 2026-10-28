@@ -63,4 +63,17 @@ describe("useKeyDown", () => {
     press({ key: "1" });
     expect(screen).toHaveBeenCalledTimes(1);
   });
+
+  test("does not throw where window exists without keyboard events (React Native)", () => {
+    // React Native defines `window` as an object, but it has no addEventListener. Calling it threw
+    // "undefined is not a function" and the whole plugin failed on Android.
+    vi.stubGlobal("window", {});
+    expect(() => useKeyDown(vi.fn())).not.toThrow();
+    expect(() => useKeyDown(vi.fn(), true)).not.toThrow();
+  });
+
+  test("a window with only addEventListener is not used either, so cleanup cannot throw", () => {
+    vi.stubGlobal("window", { addEventListener: vi.fn() });
+    expect(() => useKeyDown(vi.fn())).not.toThrow();
+  });
 });
