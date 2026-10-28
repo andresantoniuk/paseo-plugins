@@ -113,14 +113,12 @@ export function AgentGraph({
     setSelectedId(focusedAgentId);
   }, [focusedAgentId]);
 
-  const hostChoices = useMemo(() => {
-    const byId = new Map<string, HostScope>();
-    for (const entry of entries) {
-      const scope = hostOf(entry);
-      if (scope && !byId.has(scope.serverId)) byId.set(scope.serverId, scope);
-    }
-    return [...byId.values()].sort((left, right) => left.label.localeCompare(right.label));
-  }, [entries]);
+  // From the online hosts, not the filtered entries: a bucket filter that
+  // empties one host must not hide the row that clears its host filter.
+  const hostChoices = useMemo(
+    () => [...hosts].sort((left, right) => left.label.localeCompare(right.label)),
+    [hosts],
+  );
 
   const projectKeys = useMemo(() => {
     const map = new Map<string, string>();

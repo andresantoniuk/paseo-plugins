@@ -180,4 +180,21 @@ describe("useAllHostsMonitor", () => {
     }
     for (const cleanup of cleanups) if (typeof cleanup === "function") cleanup();
   });
+
+  test("names a host that fails to load and keeps the others", async () => {
+    hooks.clients = { "srv-a": connect("alpha-entry") };
+    hooks.hosts = [
+      { serverId: "srv-a", label: "alpha", status: "online" },
+      { serverId: "srv-b", label: "beta", status: "online" },
+    ];
+
+    useAllHostsMonitor();
+    const data = (await hooks.query?.queryFn()) as {
+      entries: Array<{ id: string }>;
+      failedHosts: string[];
+    };
+
+    expect(data.failedHosts).toEqual(["beta"]);
+    expect(data.entries.map((entry) => entry.id)).toEqual(["alpha-entry"]);
+  });
 });
