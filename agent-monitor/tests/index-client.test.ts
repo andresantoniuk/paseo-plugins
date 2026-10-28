@@ -39,6 +39,9 @@ describe("client entry", () => {
       "addScreen:monitor",
       "addSidebarHeaderItem:monitor",
       "addCommandCenterItem:open-monitor",
+      "addCommandCenterItem:cycle-next-agent",
+      "addCommandCenterItem:cycle-previous-agent",
+      "addCommandCenterItem:open-overview",
       "addCommandCenterItem:configure-monitor",
     ]);
 
@@ -52,5 +55,47 @@ describe("client entry", () => {
     const openScreen = vi.fn();
     commands.find(({ id }) => id === "open-monitor")?.onSelect({ openScreen });
     expect(openScreen).toHaveBeenCalledWith({ screenId: "monitor" });
+  });
+
+  test("Agent overview opens the monitor in overview mode", () => {
+    const { client, commands } = host();
+    contribute(client);
+    const openScreen = vi.fn();
+    commands.find(({ id }) => id === "open-overview")?.onSelect({ openScreen });
+    expect(openScreen).toHaveBeenCalledWith({ screenId: "monitor", params: { view: "overview" } });
+  });
+
+  test("Next agent hands off to the next target, wrapping around", async () => {
+    const { setCycleList, takeAgentOpen } = await import("../client/focus-request");
+    const { client, commands } = host();
+    contribute(client);
+    setCycleList([
+      { agentId: "a", serverId: "srv-1" },
+      { agentId: "b", serverId: "srv-2" },
+    ]);
+    const openScreen = vi.fn();
+    const next = commands.find(({ id }) => id === "cycle-next-agent")?.onSelect;
+    next?.({ openScreen });
+    const first = takeAgentOpen();
+    expect(first?.agentId).toBe("a");
+    expect(openScreen).toHaveBeenCalledWith({
+      screenId: "monitor",
+      params: { openAgent: first?.token },
+    });
+    next?.({ openScreen });
+    expect(takeAgentOpen()?.agentId).toBe("b");
+    next?.({ openScreen });
+    expect(takeAgentOpen()?.agentId).toBe("a");
+  });
+
+  test("Cycling with an empty list falls back to the overview", async () => {
+    const { setCycleList, takeAgentOpen } = await import("../client/focus-request");
+    const { client, commands } = host();
+    contribute(client);
+    setCycleList([]);
+    const openScreen = vi.fn();
+    commands.find(({ id }) => id === "cycle-previous-agent")?.onSelect({ openScreen });
+    expect(openScreen).toHaveBeenCalledWith({ screenId: "monitor", params: { view: "overview" } });
+    expect(takeAgentOpen()).toBeNull();
   });
 });

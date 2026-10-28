@@ -1,11 +1,26 @@
-import { type PluginSurfaceProps, useHosts, usePaseo, useSettings } from "@getpaseo/plugin/client";
+import { getPaseoClient, type PluginSurfaceProps, useSettings } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/ui";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { FlatList, Pressable, Text, TextInput, View } from "react-native";
+import { useMutation } from "@tanstack/react-query";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import {
+  FlatList,
+  Pressable,
+  Text,
+  TextInput,
+  type TextStyle,
+  View,
+  type ViewStyle,
+} from "react-native";
 import { initialBucket, type MonitorSettings, monitorSettings } from "../shared/monitor-settings";
 import { DiffStat, type DiffStatStyles } from "./diff-stat";
-import { useInteractionGraph } from "./graph-data";
+import {
+  peekAgentFocus,
+  peekAgentOpen,
+  requestAgentFocus,
+  takeAgentFocus,
+  takeAgentOpen,
+} from "./focus-request";
+import { useAllHostsInteractionGraph } from "./graph-data";
 import { AgentGraph } from "./graph-view";
 import {
   type AgentEntry,
@@ -17,8 +32,12 @@ import {
   buildRoster,
   childCounts,
   delegatedFromServerId,
-  type MonitorDirectory,
+  groupByProject,
+  type HostScope,
+  hostColor,
+  hostOf,
   matches,
+  mergeProjectGroupsAcrossHosts,
   type ProjectGroup,
   parentAgentId,
   parseBucketParam,
@@ -30,12 +49,12 @@ import {
   type WorkspaceSummary,
   waitingSince,
 } from "./monitor";
-import { useMonitorQuery } from "./monitor-data";
+import { useAllHostsMonitor } from "./monitor-data";
+import { AgentOverview } from "./overview-screen";
 import { settingsAreReady } from "./settings-state";
+import { useKeyDown, type WebKeyEvent } from "./web-keys";
 
 const CLOCK_INTERVAL_MS = 15_000;
-
-const EMPTY_DIRECTORY: MonitorDirectory = { workspaces: new Map(), projects: new Map() };
 
 type AgentMonitorProps = PluginSurfaceProps & {
   onOpenSettings(): void;
@@ -45,10 +64,57 @@ type AgentMonitorProps = PluginSurfaceProps & {
    * press and drop the search text. Omitted on hosts without screens.
    */
   bucketParam?: string;
+  /**
+   * An agent id to focus when the screen opens (e.g. from a saved link). The
+   * monitor switches to the graph with that card selected, once.
+   */
+  agentParam?: string;
+  /**
+   * A nonce the sidebar sends when it opens this screen for a handoff. The
+   * request itself travels in module state; the nonce only ties this screen
+   * open to it, and re-runs the handoff when the screen is already mounted.
+   */
+  openAgentToken?: string;
+  /**
+   * A view to show when the screen opens ("overview" for the keyboard-driven
+   * mission control, anything else for the roster). View switches afterwards
+   * are local state.
+   */
+  viewParam?: string;
 };
 
 export function AgentMonitor(props: AgentMonitorProps) {
   const settingsState = useSettings(monitorSettings);
+  // Hand off to the agent's own screen when the sidebar quick access asked for
+  // it. The handoff runs in a layout effect so it lands before the monitor
+  // paints, but the monitor still renders: if the navigation loses a race the
+  // user sees the roster, never a blank screen. Hosts without navigation fall
+  // back to the graph focus deep link.
+  useLayoutEffect(() => {
+    // The token arrives as a screen param and ties this open to the request; a
+    // stale request never matches a later visit's token (or its absence).
+    const pending = peekAgentOpen();
+    if (!pending || pending.token !== props.openAgentToken) return;
+    // Defer past this commit: a navigate dispatched while the pushed monitor
+    // route is still being committed is dropped by the router. Take inside the
+    // timer so an effect re-run before the tick cannot drop the request.
+    const handoff = setTimeout(() => {
+      // Check before taking: a newer monitor open may have replaced the request.
+      const request = peekAgentOpen();
+      if (!request || request.token !== props.openAgentToken) return;
+      takeAgentOpen();
+      if (props.navigation) {
+        try {
+          props.navigation.openAgent({ agentId: request.agentId, serverId: request.serverId });
+          return;
+        } catch {
+          // ignore: the focus fallback runs below
+        }
+      }
+      requestAgentFocus(request.agentId);
+    }, 0);
+    return () => clearTimeout(handoff);
+  }, [props.navigation, props.openAgentToken]);
   const styles = useMemo(
     () => ({
       screen: {
@@ -139,51 +205,156 @@ export function AgentMonitor(props: AgentMonitorProps) {
   );
 }
 
+const BUCKET_KEYS: Record<Bucket, string> = {
+  attention: "T",
+  running: "U",
+  idle: "I",
+  closed: "C",
+};
+
+function KeyBadge({ digit, badge, label }: { digit: string; badge: ViewStyle; label: TextStyle }) {
+  return (
+    <View style={badge}>
+      <Text style={label}>{digit}</Text>
+    </View>
+  );
+}
+
 function AgentMonitorRoster({
   theme,
   layout,
-  host,
   navigation,
   onOpenSettings,
   bucketParam,
+  agentParam,
+  viewParam,
   settings,
 }: AgentMonitorProps & { settings: MonitorSettings }) {
-  const paseo = usePaseo();
-  const queryClient = useQueryClient();
-  const queryKey = useMemo(() => ["agent-monitor", "agents", host.id], [host.id]);
-  const { data, error, isPending, isFetching, refetch } = useMonitorQuery(host.id);
+  const monitor = useAllHostsMonitor();
+  const { entries: allEntries, directory, hosts, truncated, failedHosts } = monitor;
 
   const [selected, setSelected] = useState<Bucket | null>(() => {
     const fromParam = parseBucketParam(bucketParam);
     return fromParam === undefined ? initialBucket(settings) : fromParam;
   });
+  const [hostSelected, setHostSelected] = useState<string | null>(null);
   const [needle, setNeedle] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const [sweepArmed, setSweepArmed] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<ReadonlySet<string>>(() => new Set());
-  const [view, setView] = useState<"roster" | "graph">("roster");
+  const [view, setView] = useState<"roster" | "graph" | "overview">(() =>
+    viewParam === "overview" ? "overview" : "roster",
+  );
+  useKeyDown(
+    useCallback(
+      (event: WebKeyEvent) => {
+        // Letters drive the header everywhere (the overview owns digits for
+        // jumping to agents). R/G/O switch views; A/T/U/I/C pick filters.
+        switch (event.key.toLowerCase()) {
+          case "r":
+            setView("roster");
+            break;
+          case "g":
+            setView("graph");
+            break;
+          case "o":
+            setView("overview");
+            break;
+          case "a":
+            setSelected(null);
+            break;
+          case "t":
+            setSelected(selected === "attention" ? null : "attention");
+            break;
+          case "u":
+            setSelected(selected === "running" ? null : "running");
+            break;
+          case "i":
+            setSelected(selected === "idle" ? null : "idle");
+            break;
+          case "c":
+            setSelected(selected === "closed" ? null : "closed");
+            break;
+          default:
+            break;
+        }
+      },
+      [selected],
+    ),
+  );
 
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), CLOCK_INTERVAL_MS);
     return () => clearInterval(clock);
   }, []);
 
+  const entriesById = useMemo(
+    () => new Map(allEntries.map((entry) => [entry.agent.id, entry])),
+    [allEntries],
+  );
+
   const archive = useMutation({
     mutationFn: async (agentIds: readonly string[]) => {
-      for (const agentId of agentIds) await paseo.agents.ref(agentId).archive();
+      const byHost = new Map<string, string[]>();
+      for (const agentId of agentIds) {
+        const entry = entriesById.get(agentId);
+        const serverId = entry ? hostOf(entry)?.serverId : undefined;
+        if (!serverId) continue;
+        const list = byHost.get(serverId);
+        if (list) list.push(agentId);
+        else byHost.set(serverId, [agentId]);
+      }
+      for (const [serverId, ids] of byHost) {
+        const client = getPaseoClient(serverId);
+        for (const id of ids) await client.agents.ref(id).archive();
+      }
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey }),
+    onSettled: () => monitor.refetchAll(),
   });
 
-  const entries = data?.entries ?? [];
-  const directory = data?.directory ?? EMPTY_DIRECTORY;
+  const entries = useMemo(
+    () =>
+      hostSelected === null
+        ? allEntries
+        : allEntries.filter((entry) => hostOf(entry)?.serverId === hostSelected),
+    [allEntries, hostSelected],
+  );
+  const multiHost = hosts.length > 1;
+
+  // Deep link from the sidebar quick access: once the entries arrive, show
+  // everything and focus the requested agent's card in the graph. The request
+  // lives in module state as well as in params, because reopening the same
+  // screen does not always deliver fresh params.
+  const [deepFocusId, setDeepFocusId] = useState<string | null>(null);
+  useEffect(() => {
+    if (deepFocusId) return;
+    const wanted = peekAgentFocus() ?? agentParam;
+    if (!wanted) return;
+    if (allEntries.some((entry) => entry.agent.id === wanted)) {
+      takeAgentFocus();
+      setDeepFocusId(wanted);
+      setHostSelected(null);
+      setSelected(null);
+      setView("graph");
+    }
+  }, [agentParam, allEntries, deepFocusId]);
   const counts = useMemo(() => {
     const totals: Record<Bucket, number> = { attention: 0, running: 0, idle: 0, closed: 0 };
     for (const entry of entries) totals[bucketOf(entry.agent)] += 1;
     return totals;
   }, [entries]);
-  const childrenByParent = useMemo(() => childCounts(entries, host.id), [entries, host.id]);
-  const hosts = useHosts();
+  const childrenByParent = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const host of hosts) {
+      const scoped = entries.filter(
+        (entry) => (hostOf(entry)?.serverId ?? host.serverId) === host.serverId,
+      );
+      for (const [id, count] of childCounts(scoped, host.serverId)) {
+        counts.set(id, (counts.get(id) ?? 0) + count);
+      }
+    }
+    return counts;
+  }, [entries, hosts]);
   const closedIds = useMemo(
     () =>
       entries.filter((entry) => bucketOf(entry.agent) === "closed").map((entry) => entry.agent.id),
@@ -201,17 +372,37 @@ function AgentMonitorRoster({
       return matches(entry, search);
     });
   }, [entries, needle, selected, settings]);
-  const roster = useMemo(
-    () => buildRoster(visibleEntries, directory, settings, host.id),
-    [directory, host.id, settings, visibleEntries],
-  );
+  const roster = useMemo(() => {
+    // Compact and workspace rosters sort across every host at once: entries
+    // resolve parent links against their own host. Project groups build per
+    // host (project ids are daemon scoped) and merge by name afterwards.
+    if (settings.grouping !== "project") {
+      return buildRoster(visibleEntries, directory, settings, hosts[0]?.serverId ?? "");
+    }
+    const scopedEntries = (host: HostScope) =>
+      visibleEntries.filter(
+        (entry) => (hostOf(entry)?.serverId ?? host.serverId) === host.serverId,
+      );
+    const perHost = hosts.map((host: HostScope) => ({
+      host,
+      projects: groupByProject(scopedEntries(host), directory, {
+        floatPinned: settings.floatPinned,
+        agentSort: settings.agentSort,
+        hostId: host.serverId,
+      }),
+    }));
+    return {
+      kind: "project" as const,
+      projects: mergeProjectGroupsAcrossHosts(perHost, settings),
+    };
+  }, [directory, hosts, settings, visibleEntries]);
   // Full roster, not visibleEntries: the graph reads timelines and must not rescan per keystroke.
-  const interactions = useInteractionGraph(host.id, entries, view === "graph");
+  const interactions = useAllHostsInteractionGraph(hosts, entries, view === "graph");
   const refetchInteractions = interactions.refetch;
   const refresh = useCallback(() => {
-    void refetch();
+    monitor.refetchAll();
     if (view === "graph" && entries.length > 0) void refetchInteractions();
-  }, [entries.length, refetch, refetchInteractions, view]);
+  }, [entries.length, monitor.refetchAll, refetchInteractions, view]);
 
   const styles = useMemo(() => {
     const gutter = layout.compact ? 12 : 20;
@@ -260,6 +451,16 @@ function AgentMonitorRoster({
       },
       chipText: { color: muted, fontSize: 12 },
       chipTextOn: { color: theme.colors.accentForeground, fontSize: 12 },
+      chipRow: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 },
+      keyBadge: {
+        minWidth: 18,
+        alignItems: "center" as const,
+        borderRadius: 5,
+        backgroundColor: theme.colors.surface2,
+        paddingHorizontal: 4,
+        paddingVertical: 1,
+      },
+      keyBadgeText: { color: muted, fontSize: 10 },
       search: {
         color: theme.colors.foreground,
         borderRadius: 6,
@@ -408,7 +609,7 @@ function AgentMonitorRoster({
               ? theme.colors.statusSuccess
               : theme.colors.foregroundMuted;
       const meta = agent.model ?? agent.provider;
-      const delegatedFrom = delegatedFromServerId(agent, host.id);
+      const delegatedFrom = delegatedFromServerId(agent, hostOf(item)?.serverId ?? "");
       const delegatedFromLabel = delegatedFrom
         ? (hosts.find((candidate) => candidate.serverId === delegatedFrom)?.label ?? delegatedFrom)
         : null;
@@ -429,6 +630,7 @@ function AgentMonitorRoster({
             </View>
             {showPlacement ? (
               <Text style={styles.rowMeta} numberOfLines={1} ellipsizeMode="tail">
+                {multiHost && hostOf(item) ? `${hostOf(item)?.label} · ` : ""}
                 {placement(item)}
               </Text>
             ) : null}
@@ -459,7 +661,12 @@ function AgentMonitorRoster({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Open agent ${title(item)}`}
-              onPress={() => navigation.openAgent({ agentId: agent.id })}
+              onPress={() =>
+                navigation.openAgent({
+                  agentId: agent.id,
+                  ...(hostOf(item) ? { serverId: hostOf(item)?.serverId } : null),
+                })
+              }
               style={({ pressed }) => [styles.rowMain, pressed && styles.navigationPressed]}
             >
               {body}
@@ -488,22 +695,11 @@ function AgentMonitorRoster({
         </View>
       );
     },
-    [
-      archive,
-      childrenByParent,
-      host.id,
-      hosts,
-      navigation,
-      now,
-      settings,
-      styles,
-      sweepArmed,
-      theme,
-    ],
+    [archive, childrenByParent, multiHost, navigation, now, settings, styles, sweepArmed, theme],
   );
 
   const renderWorkspaceHeader = useCallback(
-    (workspace: WorkspaceSummary) => {
+    (workspace: WorkspaceSummary, host?: HostScope, showHost = false) => {
       const navigationId = workspace.navigationId;
       const content = (
         <>
@@ -516,6 +712,23 @@ function AgentMonitorRoster({
             <Text style={styles.workspaceTitle} numberOfLines={1} ellipsizeMode="tail">
               {workspace.name}
             </Text>
+            {host && showHost ? (
+              <View
+                accessibilityLabel={`Host ${host.label}`}
+                style={{
+                  paddingHorizontal: 6,
+                  paddingVertical: 1,
+                  borderRadius: 7,
+                  borderWidth: 1,
+                  borderColor: `${hostColor(host)}66`,
+                  backgroundColor: `${hostColor(host)}26`,
+                }}
+              >
+                <Text style={{ color: hostColor(host), fontSize: 9, fontWeight: "700" }}>
+                  {host.label}
+                </Text>
+              </View>
+            ) : null}
             {settings.showDiffStats ? (
               <DiffStat
                 additions={workspace.additions}
@@ -536,7 +749,12 @@ function AgentMonitorRoster({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Open workspace ${workspace.name}`}
-          onPress={() => navigation.openWorkspace({ workspaceId: navigationId })}
+          onPress={() =>
+            navigation.openWorkspace({
+              workspaceId: navigationId,
+              ...(host ? { serverId: host.serverId } : null),
+            })
+          }
           style={({ pressed }) => [styles.workspaceHeader, pressed && styles.navigationPressed]}
         >
           {content}
@@ -553,13 +771,18 @@ function AgentMonitorRoster({
       const collapse = project
         ? shouldCollapseWorkspace(project, group.workspace, settings.collapseMatchingWorkspace)
         : false;
+      const scope = group.entries.length > 0 ? (hostOf(group.entries[0]) ?? undefined) : undefined;
       return (
         <View key={group.workspace.id}>
-          {collapse ? null : renderWorkspaceHeader(group.workspace)}
+          {collapse ? null : renderWorkspaceHeader(group.workspace, scope, multiHost)}
           {group.entries.map((entry) => (
             <View
               key={entry.agent.id}
-              style={parentAgentId(entry.agent, host.id) !== null ? styles.childRow : undefined}
+              style={
+                parentAgentId(entry.agent, hostOf(entry)?.serverId ?? "") !== null
+                  ? styles.childRow
+                  : undefined
+              }
             >
               {renderRow({ item: entry })}
             </View>
@@ -568,9 +791,9 @@ function AgentMonitorRoster({
       );
     },
     [
-      host.id,
       renderRow,
       renderWorkspaceHeader,
+      multiHost,
       settings.collapseMatchingWorkspace,
       styles.childRow,
     ],
@@ -579,16 +802,32 @@ function AgentMonitorRoster({
   const renderProject = useCallback(
     ({ item: project }: { item: ProjectGroup }) => {
       const collapsed = collapsedProjects.has(project.id);
-      const collapsedWorkspace =
+      const hostLabels = multiHost
+        ? [
+            ...new Set(
+              project.workspaces.flatMap((group) =>
+                group.entries.map((entry) => hostOf(entry)?.label),
+              ),
+            ),
+          ]
+            .filter((label): label is string => Boolean(label))
+            .sort()
+        : [];
+      const collapsedGroup =
         project.workspaces.length === 1 &&
         shouldCollapseWorkspace(
           project,
           project.workspaces[0].workspace,
           settings.collapseMatchingWorkspace,
         )
-          ? project.workspaces[0].workspace
+          ? project.workspaces[0]
           : null;
+      const collapsedWorkspace = collapsedGroup?.workspace ?? null;
       const collapsedWorkspaceId = collapsedWorkspace?.navigationId;
+      const collapsedScope =
+        collapsedGroup && collapsedGroup.entries.length > 0
+          ? hostOf(collapsedGroup.entries[0])
+          : undefined;
       return (
         <View>
           <View style={styles.projectHeaderRow}>
@@ -637,13 +876,23 @@ function AgentMonitorRoster({
                   {collapsedWorkspace.labels.slice(0, 2).join(" · ")}
                 </Text>
               ) : null}
+              {hostLabels.length > 0 ? (
+                <Text style={styles.headerMeta} numberOfLines={1} ellipsizeMode="tail">
+                  {hostLabels.join(", ")}
+                </Text>
+              ) : null}
             </Pressable>
             {navigation && collapsedWorkspaceId ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Open workspace ${collapsedWorkspace.name}`}
+                accessibilityLabel={`Open workspace ${collapsedWorkspace?.name}`}
                 hitSlop={6}
-                onPress={() => navigation.openWorkspace({ workspaceId: collapsedWorkspaceId })}
+                onPress={() =>
+                  navigation.openWorkspace({
+                    workspaceId: collapsedWorkspaceId,
+                    ...(collapsedScope ? { serverId: collapsedScope.serverId } : null),
+                  })
+                }
                 style={({ pressed }) => [
                   styles.iconButton,
                   styles.projectWorkspaceAction,
@@ -660,13 +909,13 @@ function AgentMonitorRoster({
         </View>
       );
     },
-    [collapsedProjects, navigation, renderWorkspaceGroup, settings, styles, theme],
+    [collapsedProjects, multiHost, navigation, renderWorkspaceGroup, settings, styles, theme],
   );
 
   const separator = useCallback(() => <View style={styles.separator} />, [styles]);
   const empty = (
     <Text style={styles.empty}>
-      {isPending ? "Loading agents…" : "No agents match this filter."}
+      {monitor.isPending ? "Loading agents…" : "No agents match this filter."}
     </Text>
   );
 
@@ -675,9 +924,13 @@ function AgentMonitorRoster({
       <View style={styles.header}>
         <View style={styles.summaryLine}>
           <Text style={styles.summary} numberOfLines={1} ellipsizeMode="tail">
-            {entries.length} agents on {host.label}
+            {entries.length} agents on{" "}
+            {multiHost ? `${hosts.length} hosts` : (hosts[0]?.label ?? "this host")}
+            {truncated ? "+" : ""}
           </Text>
-          <Text style={[styles.syncing, isFetching ? null : styles.syncingHidden]}>syncing</Text>
+          <Text style={[styles.syncing, monitor.isFetching ? null : styles.syncingHidden]}>
+            syncing
+          </Text>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Refresh agents"
@@ -699,48 +952,96 @@ function AgentMonitorRoster({
           <View style={styles.viewToggle}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Show roster view"
+              accessibilityLabel="Show roster view (R)"
               onPress={() => setView("roster")}
               style={view === "roster" ? styles.viewToggleItemOn : styles.viewToggleItem}
             >
-              <Text style={view === "roster" ? styles.viewToggleTextOn : styles.viewToggleText}>
-                Roster
-              </Text>
+              <View style={styles.chipRow}>
+                <KeyBadge digit="R" badge={styles.keyBadge} label={styles.keyBadgeText} />
+                <Text style={view === "roster" ? styles.viewToggleTextOn : styles.viewToggleText}>
+                  Roster
+                </Text>
+              </View>
             </Pressable>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Show graph view"
+              accessibilityLabel="Show graph view (G)"
               onPress={() => setView("graph")}
               style={view === "graph" ? styles.viewToggleItemOn : styles.viewToggleItem}
             >
-              <Text style={view === "graph" ? styles.viewToggleTextOn : styles.viewToggleText}>
-                Graph
-              </Text>
+              <View style={styles.chipRow}>
+                <KeyBadge digit="G" badge={styles.keyBadge} label={styles.keyBadgeText} />
+                <Text style={view === "graph" ? styles.viewToggleTextOn : styles.viewToggleText}>
+                  Graph
+                </Text>
+              </View>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Show overview (O)"
+              onPress={() => setView("overview")}
+              style={view === "overview" ? styles.viewToggleItemOn : styles.viewToggleItem}
+            >
+              <View style={styles.chipRow}>
+                <KeyBadge digit="O" badge={styles.keyBadge} label={styles.keyBadgeText} />
+                <Text style={view === "overview" ? styles.viewToggleTextOn : styles.viewToggleText}>
+                  Overview
+                </Text>
+              </View>
             </Pressable>
           </View>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Show all agents"
+            accessibilityLabel="Show all agents (A)"
             onPress={() => setSelected(null)}
             style={selected === null ? styles.chipOn : styles.chip}
           >
-            <Text style={selected === null ? styles.chipTextOn : styles.chipText}>
-              All {entries.length}
-            </Text>
+            <View style={styles.chipRow}>
+              <KeyBadge digit="A" badge={styles.keyBadge} label={styles.keyBadgeText} />
+              <Text style={selected === null ? styles.chipTextOn : styles.chipText}>
+                All {entries.length}
+              </Text>
+            </View>
           </Pressable>
           {BUCKETS.map((bucket) => (
             <Pressable
               key={bucket}
               accessibilityRole="button"
-              accessibilityLabel={`Show ${BUCKET_TITLES[bucket]} agents`}
+              accessibilityLabel={`Show ${BUCKET_TITLES[bucket]} agents (${BUCKET_KEYS[bucket]})`}
               onPress={() => setSelected(selected === bucket ? null : bucket)}
               style={selected === bucket ? styles.chipOn : styles.chip}
             >
-              <Text style={selected === bucket ? styles.chipTextOn : styles.chipText}>
-                {BUCKET_TITLES[bucket]} {counts[bucket]}
-              </Text>
+              <View style={styles.chipRow}>
+                <KeyBadge
+                  digit={BUCKET_KEYS[bucket]}
+                  badge={styles.keyBadge}
+                  label={styles.keyBadgeText}
+                />
+                <Text style={selected === bucket ? styles.chipTextOn : styles.chipText}>
+                  {BUCKET_TITLES[bucket]} {counts[bucket]}
+                </Text>
+              </View>
             </Pressable>
           ))}
+          {multiHost
+            ? hosts.map((host: HostScope) => (
+                <Pressable
+                  key={host.serverId}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Show agents on ${host.label}`}
+                  onPress={() =>
+                    setHostSelected(hostSelected === host.serverId ? null : host.serverId)
+                  }
+                  style={hostSelected === host.serverId ? styles.chipOn : styles.chip}
+                >
+                  <Text
+                    style={hostSelected === host.serverId ? styles.chipTextOn : styles.chipText}
+                  >
+                    {host.label}
+                  </Text>
+                </Pressable>
+              ))
+            : null}
         </View>
         <TextInput
           style={styles.search}
@@ -776,12 +1077,28 @@ function AgentMonitorRoster({
           </View>
         ) : null}
       </View>
-      {error ? <Text style={styles.error}>{error.message}</Text> : null}
+      {failedHosts.length > 0 ? (
+        <Text style={styles.error}>
+          {failedHosts.join(", ")} unreachable, showing the remaining hosts
+        </Text>
+      ) : null}
       {archive.error ? <Text style={styles.error}>{archive.error.message}</Text> : null}
-      {view === "graph" ? (
+      {view === "overview" ? (
+        <AgentOverview
+          theme={theme}
+          layout={layout}
+          navigation={navigation}
+          onExit={() => setView("roster")}
+        />
+      ) : view === "graph" ? (
         <AgentGraph
-          hostId={host.id}
           entries={visibleEntries}
+          hosts={hosts}
+          focusedAgentId={
+            deepFocusId && visibleEntries.some((entry) => entry.agent.id === deepFocusId)
+              ? deepFocusId
+              : null
+          }
           interactions={interactions.data}
           loading={interactions.isPending}
           theme={theme}

@@ -57,6 +57,21 @@ screenshot uses the same synthetic project and agent names.
 - Select an agent row to open that agent, or select a workspace header (or its folder button when
   collapsed) to open its workspace through Paseo's cross-platform navigation API.
 - Archive one agent, or sweep every closed agent (two taps).
+- **Multi-host**: when the client connects to more than one host, the monitor merges every online
+  host into one screen. The header counts agents across hosts, host chips filter the roster, rows
+  show their host in compact placement lines, and project groups merge by base name so one project
+  reads as one group (a per-host display suffix such as `ACME · alpha` does not split the group).
+  The graph adds a host filter row, shows the host in node details, and opens agents and workspaces
+  on their own host through the navigation `serverId`. Timeline sweeps run per host and merge, and
+  archive fans out to the owning host of each agent. A host that fails to load is named in a
+  warning while the rest keep working; the sidebar badge counts every online host. Graph cards and
+  workspace headers carry a host pill in the host's color when more than one host is shown, panels
+  spanning hosts list them, and project headers name their hosts.
+- **Agent overview**: a Mission Control grid with every running or attention-needing agent, summoned
+  from the command center. `1-9` jump straight to an agent, `Tab` or arrows move the selection,
+  `Enter` opens, `Esc` backs out. `Next agent` / `Previous agent` commands cycle the same list with
+  wraparound. Inside the monitor, `R`/`G`/`O` switch Roster, Graph and Overview, and `A`/`T`/`U`/`I`/`C`
+  pick All plus the four buckets; digits stay reserved for jumping straight to agents.
 - On Paseo 0.14 and later, eligible idle resumable agents are released after about an hour and appear in
   Closed (active work, descendants, pending finish notifications and provider safety checks keep a
   runtime resident). They keep their record and resume on the next prompt, so **Archive N closed** archives
@@ -64,40 +79,46 @@ screenshot uses the same synthetic project and agent names.
 
 ## Sidebar row
 
-- The row's badge counts the Attention bucket, using the same rule as the roster. It shows no
-  number while the roster loads or after a refresh fails, and `N+` once the agent list reaches the
-  2,000-agent page limit.
-- Press the badge for a popover of those agents, longest waiting first (up to eight), with
-  **Open monitor**, which opens the roster filtered to Attention.
+- The row's badge counts the Attention bucket across every online host, using the same rule as
+  the roster. It shows no number while the roster loads or when a failed host leaves no rows, and
+  `N+` when any host truncates or fails (the missing rows might need attention). The count drops
+  its lower bound once a failed host recovers.
+- Press the badge for the Mission Control overlay: running and attention-needing agents across
+  hosts, grouped with number badges (attention first, longest waiting). `1-9` jump straight to an
+  agent, `Tab` moves, `Enter` opens it directly, `Esc` dismisses the overlay. **Open monitor**
+  opens the roster filtered to Attention.
 - The monitor screen accepts a `bucket` param (`attention`, `running`, `idle`, `closed`, or `all`)
   as its initial filter, so a link such as `…/surface/monitor?param.bucket=attention` opens
   filtered and keeps that filter on reload. Chips then filter in place without changing the URL.
 
 ## How it reads state
 
-`usePaseo().agents.list()` pages the daemon agent directory, `usePaseo().workspaces.list()` reads
-workspace pin state, project id, and diff stats (200 per page, up to 10 pages each), and
-`usePaseo().projects.list()` supplies registered project names, including custom renames, so an
-agent whose workspace is beyond the paged workspace list still lands under its real project. Rows
-refresh from agent, workspace, and project subscription deltas, debounced 750ms, with a 30s
-backstop refetch. The screen, the sidebar row, and its popover share that query, subscription set,
-and backstop; on web and desktop, refreshes pause while the window is hidden and catch up when it returns. The plugin
-borrows the selected host's connection; it opens no socket of its own. Agents and workspaces in
-background workspaces are included.
+Each online host is read through its own existing client (`getPaseoClient(serverId)`):
+`agents.list()` pages the daemon agent directory, `workspaces.list()` reads workspace pin state,
+project id, and diff stats (200 per page, up to 10 pages each), and `projects.list()` supplies
+registered project names, including custom renames, so an agent whose workspace is beyond the
+paged workspace list still lands under its real project. Rows refresh from agent, workspace, and
+project subscription deltas on every host, debounced 750ms, with a 30s backstop refetch. The
+screen, the sidebar row, and its popover share that query, subscription set, and backstop; on web
+and desktop, refreshes pause while the window is hidden and catch up when it returns. The plugin
+opens no socket of its own. Agents and workspaces in background workspaces are included.
 
-The graph reads timeline tails (200 entries, up to 60 agents, four at a time) to derive message
+The graph reads timeline tails (200 entries, up to 60 agents per host, four at a time) to derive message
 and subagent edges. It refreshes every 30 seconds while open in the foreground and when Refresh
 is pressed. Readable closed timelines can contribute interactions; unreadable timelines are
 counted in the graph toolbar. Filters only change the visible graph and do not start new scans.
-The graph uses the selected host's existing connection. Graph filters, selection, and positions
+Each host's timelines are swept through that host's client and merged. Graph filters, selection, and positions
 are temporary; the existing host-scoped monitor settings are unchanged.
 
 ## Limits
 
 Interrupting a turn is not part of `PaseoApi`, so archive is the only lifecycle action here.
 
-The sidebar popover lists agents but cannot open them: Paseo gives popovers no navigation.
-Open the monitor and select the agent there.
+Popovers get no navigation, so a popover row reaches an agent through the monitor screen,
+which hands off to the agent as it mounts. The handoff runs on a tick past the route commit: a
+navigate dispatched while the pushed monitor route is still being committed is dropped by the
+router. If the handoff cannot happen, the monitor renders normally instead of leaving a blank
+screen; on hosts without navigation the same tap selects the agent's card in the graph.
 
 ## Install
 
@@ -109,6 +130,24 @@ Install the published package on the daemon host:
 paseo plugin install npm:@omercnet/paseo-agent-monitor
 paseo plugin update agent-monitor
 ```
+
+## Install on more than one host
+
+The monitor reads every online host no matter which installation renders it, so install it on each
+host whose client should keep working when the others are unreachable. The app groups the sidebar
+row by plugin and the surface keeps a host switcher, so two installs never show two rows.
+
+What stays per installation:
+
+- Settings (`scope: "host"`): grouping, sort, density, the default bucket and the display toggles
+  live on each host. Change them on both sides if you want them to match.
+- The bundle: reload every host after each change (`paseo plugin reload agent-monitor` on each
+  daemon) and keep both clones on the same commit. A stale bundle renders with old behavior, and
+  the only symptom is the surface behaving differently per selected host.
+
+A daemon with plugins disabled rejects plugin calls; enable once with `"pluginsEnabled": true`
+in its `config.json` followed by `paseo reload`. Removing one side later is
+`paseo plugin remove agent-monitor` on that host.
 
 ## Develop
 

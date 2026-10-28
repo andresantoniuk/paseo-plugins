@@ -1,20 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildGraph, edgeThickness, repoLabel } from "../client/graph";
-import { fetchInteractions, useInteractionGraph } from "../client/graph-data";
+import { fetchInteractions } from "../client/graph-data";
 import type { AgentEntry } from "../client/monitor";
 
-const hooks = vi.hoisted(() => ({
-  paseo: undefined as unknown,
-  query: undefined as undefined | Record<string, unknown>,
-}));
-
-vi.mock("@getpaseo/plugin/client", () => ({ usePaseo: () => hooks.paseo }));
-vi.mock("@tanstack/react-query", () => ({
-  useQuery: (options: Record<string, unknown>) => {
-    hooks.query = options;
-    return options;
-  },
-}));
 const HOST = "host-a";
 
 function entry(
@@ -384,37 +372,5 @@ describe("fetchInteractions", () => {
       fetchInteractions(paseo, HOST, [entry("a")], controller.signal),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(refetch).not.toHaveBeenCalled();
-  });
-});
-
-describe("useInteractionGraph", () => {
-  it("re-reads a stable roster on the monitor's 30s foreground interval", () => {
-    useInteractionGraph(HOST, [entry("a")], true);
-
-    expect(hooks.query).toMatchObject({ enabled: true, refetchInterval: 30_000 });
-    expect(hooks.query?.refetchIntervalInBackground).toBeFalsy();
-  });
-
-  it("stays disabled for another view or an empty roster", () => {
-    useInteractionGraph(HOST, [entry("a")], false);
-    expect(hooks.query?.enabled).toBe(false);
-
-    useInteractionGraph(HOST, [], true);
-    expect(hooks.query?.enabled).toBe(false);
-  });
-
-  it("hands the query's abort signal to the fetch", async () => {
-    hooks.paseo = fakePaseo({ a: [] });
-    useInteractionGraph(HOST, [entry("a")], true);
-    const queryFn = hooks.query?.queryFn as (context: { signal: AbortSignal }) => Promise<unknown>;
-    const controller = new AbortController();
-    controller.abort();
-
-    await expect(queryFn({ signal: controller.signal })).rejects.toMatchObject({
-      name: "AbortError",
-    });
-    await expect(queryFn({ signal: new AbortController().signal })).resolves.toMatchObject({
-      unreadable: 0,
-    });
   });
 });

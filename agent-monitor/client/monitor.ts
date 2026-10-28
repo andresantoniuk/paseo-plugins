@@ -32,6 +32,44 @@ export type MonitorDirectory = {
   projects: ProjectIndex;
 };
 
+export type HostScope = {
+  serverId: string;
+  label: string;
+};
+
+export const HOST_PALETTE = ["#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e"];
+
+/** A stable accent color per host, derived from the server id. */
+export function hostColor(scope: HostScope | null): string {
+  if (!scope) return "#8b8b8b";
+  let hash = 0;
+  for (let index = 0; index < scope.serverId.length; index += 1) {
+    hash = (hash * 31 + scope.serverId.charCodeAt(index)) | 0;
+  }
+  return HOST_PALETTE[Math.abs(hash) % HOST_PALETTE.length] ?? "#8b8b8b";
+}
+
+/** Entries tagged by the host they were listed from; untagged entries predate the merge. */
+export type ScopedAgentEntry = AgentEntry & { hostScope?: HostScope };
+
+export function withHostScope(entry: AgentEntry, host: HostScope): ScopedAgentEntry {
+  return { ...entry, hostScope: host };
+}
+
+export function hostOf(entry: AgentEntry): HostScope | null {
+  const scope = (entry as ScopedAgentEntry).hostScope;
+  return scope && typeof scope.serverId === "string" ? scope : null;
+}
+
+/**
+ * The project index key for an entry's host. Project keys repeat across hosts (the same repo
+ * registered on two daemons), so a merged directory indexes each host's projects under its server
+ * id. Unscoped entries and single-host directories use the bare key.
+ */
+export function projectIndexKey(host: HostScope | null, key: string): string {
+  return host ? `${host.serverId}\u0000${key}` : key;
+}
+
 /**
  * Indexes each project under its id and its key so either identifier resolves it. A project whose
  * key collides with another project's id overwrites that entry, so the last one listed wins.
@@ -133,7 +171,14 @@ export function parseBucketParam(value: string | undefined): Bucket | null | und
 }
 
 /** The lean row the sidebar popover needs. Its fields change only when the row visibly changes. */
-export type AttentionItem = { id: string; title: string; state: string; since: number };
+export type AttentionItem = {
+  id: string;
+  title: string;
+  state: string;
+  since: number;
+  detail: string;
+  host: HostScope | null;
+};
 
 /** Agents in the attention bucket, longest-waiting first. Uses the same `bucketOf` as the screen. */
 export function attentionItems(entries: readonly AgentEntry[]): AttentionItem[] {
@@ -144,21 +189,28 @@ export function attentionItems(entries: readonly AgentEntry[]): AttentionItem[] 
       title: title(entry),
       state: stateLabel(entry.agent),
       since: waitingSince(entry.agent),
+      detail: entry.agent.model
+        ? `${entry.agent.provider} · ${entry.agent.model}`
+        : entry.agent.provider,
+      host: hostOf(entry),
     }))
     .sort((left, right) => left.since - right.since);
 }
 
 /**
- * The count to show, or null when it cannot be trusted: still loading, or the last refresh failed
- * so the cached roster may be stale. A truncated roster is a lower bound.
+ * The count to show, or null when it cannot be trusted: still loading, or a failed host left no
+ * rows at all. Otherwise a truncated roster or a failed host makes the count a lower bound,
+ * because the missing rows might include agents that need attention.
  */
 export function attentionCount(state: {
   items: readonly AttentionItem[] | undefined;
   truncated: boolean;
   failed: boolean;
+  loading?: boolean;
 }): { count: number; lowerBound: boolean } | null {
-  if (!state.items || state.failed) return null;
-  return { count: state.items.length, lowerBound: state.truncated };
+  if (!state.items || state.loading) return null;
+  if (state.items.length === 0 && state.failed) return null;
+  return { count: state.items.length, lowerBound: state.truncated || state.failed };
 }
 
 export function stateLabel(agent: AgentSnapshot): string {
@@ -206,6 +258,7 @@ export function title(entry: AgentEntry): string {
 export function matches(entry: AgentEntry, needle: string): boolean {
   if (needle.length === 0) return true;
   return [
+    hostOf(entry)?.label ?? "",
     entry.agent.title ?? "",
     entry.agent.id,
     entry.agent.provider,
@@ -233,16 +286,21 @@ function compareBySort(left: AgentEntry, right: AgentEntry, agentSort: AgentSort
   return byBucket === 0 ? waitingSince(right.agent) - waitingSince(left.agent) : byBucket;
 }
 
+/** `hostId` is the fallback for entries without a host scope; scoped entries resolve their own. */
 export function sortEntries(entries: AgentEntry[], agentSort: AgentSort, hostId: string): void {
+  const isChild = (entry: AgentEntry) =>
+    parentAgentId(entry.agent, hostOf(entry)?.serverId ?? hostId) !== null;
   entries.sort((left, right) => {
-    const leftChild = parentAgentId(left.agent, hostId) !== null;
-    const rightChild = parentAgentId(right.agent, hostId) !== null;
+    const leftChild = isChild(left);
+    const rightChild = isChild(right);
     if (leftChild !== rightChild) return leftChild ? 1 : -1;
     return compareBySort(left, right, agentSort);
   });
 }
 
-function sortWorkspaces(workspaces: WorkspaceGroup[], options: GroupOptions): void {
+type SortOptions = Pick<MonitorSettings, "floatPinned" | "agentSort">;
+
+function sortWorkspaces(workspaces: WorkspaceGroup[], options: SortOptions): void {
   workspaces.sort((left, right) => {
     if (options.floatPinned && left.workspace.pinned !== right.workspace.pinned) {
       return left.workspace.pinned ? -1 : 1;
@@ -279,7 +337,7 @@ function siblingsByProjectKey(
 ): ReadonlyMap<string, WorkspaceSummary> {
   const siblings = new Map<string, WorkspaceSummary>();
   for (const entry of entries) {
-    const key = entry.project.projectKey;
+    const key = projectIndexKey(hostOf(entry), entry.project.projectKey);
     if (siblings.has(key)) continue;
     const workspace = entry.agent.workspaceId ? workspaces.get(entry.agent.workspaceId) : undefined;
     if (workspace) siblings.set(key, workspace);
@@ -296,8 +354,9 @@ function resolveWorkspace(
   const workspaceId = navigationId ?? `agent:${entry.agent.id}`;
   const known = directory.workspaces.get(workspaceId);
   if (known) return known;
-  const project = directory.projects.get(entry.project.projectKey);
-  const sibling = siblings.get(entry.project.projectKey);
+  const key = projectIndexKey(hostOf(entry), entry.project.projectKey);
+  const project = directory.projects.get(key);
+  const sibling = siblings.get(key);
   return {
     id: workspaceId,
     navigationId,
@@ -365,7 +424,9 @@ export function groupByProject(
     }
     projects.set(projectId, {
       id: projectId,
-      name: directory.projects.get(projectId)?.name ?? group.workspace.projectName,
+      name:
+        directory.projects.get(projectIndexKey(hostOf(group.entries[0]), projectId))?.name ??
+        group.workspace.projectName,
       pinned: group.workspace.pinned,
       workspaces: [group],
     });
@@ -373,8 +434,12 @@ export function groupByProject(
 
   const result = [...projects.values()];
   for (const project of result) sortWorkspaces(project.workspaces, options);
+  sortProjects(result, options);
+  return result;
+}
 
-  return result.sort((left, right) => {
+function sortProjects(projects: ProjectGroup[], options: SortOptions): void {
+  projects.sort((left, right) => {
     if (options.floatPinned && left.pinned !== right.pinned) return left.pinned ? -1 : 1;
     if (options.agentSort === "title") return left.name.localeCompare(right.name);
     if (options.agentSort === "updated") {
@@ -441,4 +506,63 @@ export function childCounts(
     if (parentId) counts.set(parentId, (counts.get(parentId) ?? 0) + 1);
   }
   return counts;
+}
+
+/**
+ * The cross-host project name: registry display names may carry a per-host
+ * suffix ("ACME · alpha") because the core sidebar cannot unify non-git
+ * projects. The monitor groups by the base name so one project reads as one
+ * group however many hosts list it.
+ */
+export function baseProjectName(name: string): string {
+  const separator = name.indexOf(" · ");
+  return separator < 0 ? name : name.slice(0, separator).trim() || name;
+}
+
+/** The graph panel key: like `placement` but on the base project name, so one project reads as one panel however many hosts list it. */
+export function panelKey(entry: AgentEntry): string {
+  const base = baseProjectName(entry.project.projectName);
+  const workspace = entry.project.workspaceName?.trim();
+  return workspace && workspace !== entry.project.projectName ? `${base} / ${workspace}` : base;
+}
+
+export type HostedProjectGroups = {
+  host: HostScope;
+  projects: ProjectGroup[];
+};
+
+/**
+ * Merge per-host project groups by base name. Groups from different hosts that
+ * share a base name become one group under that name; its workspaces keep their
+ * host, which the UI reads back off each workspace's entries. Same-name projects
+ * on one host stay apart (the n-th on each host pairs up), and a group that
+ * merges with nothing keeps its own id and name.
+ */
+export function mergeProjectGroupsAcrossHosts(
+  all: readonly HostedProjectGroups[],
+  options: SortOptions,
+): ProjectGroup[] {
+  const merged = new Map<string, ProjectGroup>();
+  for (const { projects } of all) {
+    const seen = new Map<string, number>();
+    for (const project of projects) {
+      const name = baseProjectName(project.name);
+      const occurrence = seen.get(name) ?? 0;
+      seen.set(name, occurrence + 1);
+      const key = `${name}#${occurrence}`;
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, { ...project, workspaces: [...project.workspaces] });
+        continue;
+      }
+      existing.id = key;
+      existing.name = name;
+      existing.workspaces = [...existing.workspaces, ...project.workspaces];
+      existing.pinned = existing.pinned || project.pinned;
+    }
+  }
+  const result = [...merged.values()];
+  for (const project of result) sortWorkspaces(project.workspaces, options);
+  sortProjects(result, options);
+  return result;
 }

@@ -618,19 +618,29 @@ describe("attention summary", () => {
     expect(items.every((item) => item.since > 0)).toBe(true);
   });
 
-  test("withholds the count while loading or after a failed refresh", () => {
+  test("withholds the count while loading or when a failed host has no rows", () => {
     const items = attentionItems([entry({ id: "b", requiresAttention: true })]);
     expect(attentionCount({ items: undefined, truncated: false, failed: false })).toBeNull();
-    expect(attentionCount({ items, truncated: false, failed: true })).toBeNull();
+    expect(attentionCount({ items: [], truncated: false, failed: true })).toBeNull();
+    expect(
+      attentionCount({ items: [], truncated: false, failed: false, loading: true }),
+    ).toBeNull();
+    // A stand-in roster from the previous host set is still loading: its count is not this one's.
+    expect(attentionCount({ items, truncated: false, failed: false, loading: true })).toBeNull();
     expect(attentionCount({ items, truncated: false, failed: false })).toEqual({
       count: 1,
       lowerBound: false,
     });
   });
 
-  test("marks a truncated roster as a lower bound", () => {
+  test("marks a truncated roster or a failed host as a lower bound", () => {
+    const items = attentionItems([entry({ id: "b", requiresAttention: true })]);
     expect(attentionCount({ items: [], truncated: true, failed: false })).toEqual({
       count: 0,
+      lowerBound: true,
+    });
+    expect(attentionCount({ items, truncated: false, failed: true })).toEqual({
+      count: 1,
       lowerBound: true,
     });
   });

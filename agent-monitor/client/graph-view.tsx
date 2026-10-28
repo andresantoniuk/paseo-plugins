@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanResponder, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { createPressGuard, isDrag } from "./gesture";
 import {
+  buildClusterBoxes,
   buildGraph,
   edgeLabel,
   edgeThickness,
@@ -12,12 +13,25 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
 } from "./graph";
-import { type AgentEntry, bucketOf, placement } from "./monitor";
+import {
+  type AgentEntry,
+  baseProjectName,
+  bucketOf,
+  type HostScope,
+  hostColor,
+  hostOf,
+  placement,
+} from "./monitor";
 import { onWheel, type WheelInput } from "./web";
 
 type GraphViewProps = {
-  hostId: string;
   entries: AgentEntry[];
+  hosts: readonly HostScope[];
+  /**
+   * An agent id to select when the graph mounts (deep link from the sidebar
+   * quick access). Later selections are the user's own.
+   */
+  focusedAgentId?: string | null;
   interactions: InteractionData | undefined;
   loading: boolean;
   theme: PluginSurfaceProps["theme"];
@@ -52,8 +66,9 @@ const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
 export function AgentGraph({
-  hostId,
   entries,
+  hosts,
+  focusedAgentId,
   interactions,
   loading,
   theme,
@@ -61,6 +76,7 @@ export function AgentGraph({
   compact,
 }: GraphViewProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [hostFilter, setHostFilter] = useState<string | null>(null);
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
   const [workspaceFilter, setWorkspaceFilter] = useState<string | null>(null);
   const [providerFilter, setProviderFilter] = useState<string | null>(null);
@@ -78,16 +94,36 @@ export function AgentGraph({
   const canvasGuard = useMemo(createPressGuard, []);
   panRef.current = pan;
 
+  // The filter reset also runs on mount; skip that run so a deep-link
+  // selection made on the same commit survives.
+  const filtersMounted = useRef(false);
   useEffect(() => {
+    if (!filtersMounted.current) {
+      filtersMounted.current = true;
+      return;
+    }
     setManual({});
     setSelectedId(null);
     setSelectedEdge(null);
-  }, [projectFilter, workspaceFilter, providerFilter, showSubagents, connectedOnly]);
+  }, [hostFilter, projectFilter, workspaceFilter, providerFilter, showSubagents, connectedOnly]);
+
+  useEffect(() => {
+    if (!focusedAgentId) return;
+    setSelectedEdge(null);
+    setSelectedId(focusedAgentId);
+  }, [focusedAgentId]);
+
+  // From the online hosts, not the filtered entries: a bucket filter that
+  // empties one host must not hide the row that clears its host filter.
+  const hostChoices = useMemo(
+    () => [...hosts].sort((left, right) => left.label.localeCompare(right.label)),
+    [hosts],
+  );
 
   const projectKeys = useMemo(() => {
     const map = new Map<string, string>();
     for (const entry of entries) {
-      const name = entry.project.projectName;
+      const name = baseProjectName(entry.project.projectName);
       if (name && !map.has(name)) map.set(name, placement(entry));
     }
     return map;
@@ -108,15 +144,19 @@ export function AgentGraph({
     () =>
       entries.filter(
         (entry) =>
-          (!projectFilter || entry.project.projectName === projectFilter) &&
+          (!hostFilter || hostOf(entry)?.serverId === hostFilter) &&
+          (!projectFilter || baseProjectName(entry.project.projectName) === projectFilter) &&
           (!workspaceFilter || entry.project.workspaceName === workspaceFilter) &&
           (!providerFilter || entry.agent.provider === providerFilter),
       ),
-    [entries, projectFilter, workspaceFilter, providerFilter],
+    [entries, hostFilter, projectFilter, workspaceFilter, providerFilter],
   );
   const layout = useMemo(
-    () => buildGraph(filteredEntries, interactions, hostId, { includeSubagents: showSubagents }),
-    [filteredEntries, hostId, interactions, showSubagents],
+    () =>
+      buildGraph(filteredEntries, interactions, hostFilter ?? hosts[0]?.serverId ?? "", {
+        includeSubagents: showSubagents,
+      }),
+    [filteredEntries, hostFilter, hosts, interactions, showSubagents],
   );
 
   const subagentCount = useMemo(() => {
@@ -154,49 +194,10 @@ export function AgentGraph({
 
   // The halo follows the cards, so dragging a node never leaves its group
   // visually behind. It grows and shrinks with the members.
-  const clusterBoxes = useMemo(() => {
-    const groups = new Map<string, GraphNode[]>();
-    for (const node of visibleNodes) {
-      const list = groups.get(node.colorKey);
-      if (list) list.push(node);
-      else groups.set(node.colorKey, [node]);
-    }
-    const boxes: Array<{
-      key: string;
-      name: string;
-      count: number;
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-    }> = [];
-    for (const [key, group] of groups) {
-      let left = Number.POSITIVE_INFINITY;
-      let top = Number.POSITIVE_INFINITY;
-      let right = Number.NEGATIVE_INFINITY;
-      let bottom = Number.NEGATIVE_INFINITY;
-      for (const node of group) {
-        const position = positionOf(node);
-        left = Math.min(left, position.x);
-        top = Math.min(top, position.y);
-        right = Math.max(right, position.x + NODE_WIDTH);
-        bottom = Math.max(bottom, position.y + NODE_HEIGHT);
-      }
-      if (!Number.isFinite(left)) continue;
-      const pad = 20;
-      const header = 30;
-      boxes.push({
-        key,
-        name: key.split(" · ")[0] || key,
-        count: group.length,
-        x: left - pad,
-        y: top - header - pad,
-        width: right - left + pad * 2,
-        height: bottom - top + pad * 2 + header,
-      });
-    }
-    return boxes.sort((left, right) => left.name.localeCompare(right.name));
-  }, [positionOf, visibleNodes]);
+  const clusterBoxes = useMemo(
+    () => buildClusterBoxes(visibleNodes, positionOf),
+    [positionOf, visibleNodes],
+  );
 
   const focusIds = useMemo(() => {
     if (selectedEdge) return new Set([selectedEdge.from, selectedEdge.to]);
@@ -232,6 +233,8 @@ export function AgentGraph({
   const selected = selectedId ? (visibleById.get(selectedId) ?? null) : null;
 
   useEffect(() => {
+    // Wait for nodes: a deep-link selection made while entries load must survive.
+    if (visibleById.size === 0) return;
     if (selectedId && !visibleById.has(selectedId)) setSelectedId(null);
     if (
       selectedEdge &&
@@ -296,6 +299,7 @@ export function AgentGraph({
     setManual({});
     setScale(1);
     setPan({ x: 0, y: 0 });
+    setHostFilter(null);
     setProjectFilter(null);
     setWorkspaceFilter(null);
     setProviderFilter(null);
@@ -337,6 +341,7 @@ export function AgentGraph({
   );
 
   const activeFilterCount =
+    (hostFilter ? 1 : 0) +
     (projectFilter ? 1 : 0) +
     (workspaceFilter ? 1 : 0) +
     (providerFilter ? 1 : 0) +
@@ -440,6 +445,34 @@ export function AgentGraph({
         </View>
         {filtersOpen ? (
           <>
+            {hostChoices.length > 1 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 6, paddingHorizontal: 14 }}
+              >
+                <Chip
+                  label="All hosts"
+                  active={hostFilter === null}
+                  theme={theme}
+                  compact={compact}
+                  onPress={() => setHostFilter(null)}
+                />
+                {hostChoices.map((host) => (
+                  <Chip
+                    key={host.serverId}
+                    label={host.label}
+                    color={hostColor(host)}
+                    active={hostFilter === host.serverId}
+                    theme={theme}
+                    compact={compact}
+                    onPress={() =>
+                      setHostFilter(hostFilter === host.serverId ? null : host.serverId)
+                    }
+                  />
+                ))}
+              </ScrollView>
+            ) : null}
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -600,6 +633,7 @@ export function AgentGraph({
                   }}
                 >
                   {cluster.name} · {cluster.count}
+                  {cluster.hosts.length > 1 ? ` · ${cluster.hosts.join(", ")}` : ""}
                 </Text>
               </View>
             );
@@ -733,6 +767,7 @@ export function AgentGraph({
               <GraphNodeView
                 key={node.id}
                 node={node}
+                host={hostChoices.length > 1 ? node.host : null}
                 position={position}
                 scale={scale}
                 dimmed={dimmed}
@@ -788,6 +823,7 @@ export function AgentGraph({
               </Pressable>
             </View>
             <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
+              {selected.host ? `${selected.host.label} · ` : ""}
               {selected.repo}
             </Text>
             <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
@@ -798,7 +834,12 @@ export function AgentGraph({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Open agent ${selected.title}`}
-                onPress={() => navigation?.openAgent({ agentId: selected.agentId ?? "" })}
+                onPress={() =>
+                  navigation?.openAgent({
+                    agentId: selected.agentId ?? "",
+                    ...(selected.host ? { serverId: selected.host.serverId } : null),
+                  })
+                }
                 style={{
                   alignSelf: "flex-start",
                   marginTop: 4,
@@ -962,6 +1003,7 @@ function ZoomButton({
 
 function GraphNodeView({
   node,
+  host,
   position,
   scale,
   dimmed,
@@ -971,6 +1013,8 @@ function GraphNodeView({
   onMove,
 }: {
   node: GraphNode;
+  /** Shown as a pill when the graph spans more than one host. */
+  host: HostScope | null;
   position: { x: number; y: number };
   scale: number;
   dimmed: boolean;
@@ -1056,6 +1100,23 @@ function GraphNodeView({
           >
             {node.title}
           </Text>
+          {host ? (
+            <View
+              accessibilityLabel={`Host ${host.label}`}
+              style={{
+                paddingHorizontal: 6,
+                paddingVertical: 1,
+                borderRadius: 7,
+                borderWidth: 1,
+                borderColor: `${hostColor(host)}66`,
+                backgroundColor: `${hostColor(host)}26`,
+              }}
+            >
+              <Text style={{ color: hostColor(host), fontSize: 9, fontWeight: "700" }}>
+                {host.label}
+              </Text>
+            </View>
+          ) : null}
           {node.kind === "subagent" ? (
             <Icon name="Bot" size={12} color={theme.colors.statusWarning} />
           ) : null}

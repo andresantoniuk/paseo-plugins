@@ -1,38 +1,51 @@
 import type { PluginPopoverProps, PluginSidebarItemProps } from "@getpaseo/plugin/client";
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { type AttentionItem, age, attentionCount, attentionItems } from "./monitor";
-import { type MonitorData, useMonitorQuery } from "./monitor-data";
+import { requestAgentOpen, setCycleList } from "./focus-request";
+import { age, attentionCount, attentionItems, hostColor } from "./monitor";
+import { useAllHostsMonitor } from "./monitor-data";
+import { digitIndex, moveSelection, type OverviewItem, overviewItems } from "./overview";
+import { useKeyDown, type WebKeyEvent } from "./web-keys";
 
 export const MONITOR_SCREEN_ID = "monitor";
-const POPOVER_LIMIT = 8;
+const OVERVIEW_LIMIT = 12;
 
-function selectAttention(data: MonitorData) {
-  return { items: attentionItems(data.entries), truncated: data.truncated };
-}
-
-/** Attention state from the shared directory query; `count` is null while it cannot be trusted. */
-function useAttention(hostId: string) {
-  const { data, isError } = useMonitorQuery(hostId, selectAttention);
+/**
+ * Attention state across every online host, sharing the screen's merged query
+ * so the badge never misses an agent on another host. A host that fails to
+ * load makes the count a lower bound instead of hiding it.
+ */
+function useAttention() {
+  const monitor = useAllHostsMonitor();
+  const items = useMemo(() => attentionItems(monitor.entries), [monitor.entries]);
+  useEffect(() => {
+    setCycleList(
+      overviewItems(monitor.entries).map((item) => ({
+        agentId: item.id,
+        serverId: item.host?.serverId,
+      })),
+    );
+  }, [monitor.entries]);
   return {
-    items: data?.items,
+    items,
     summary: attentionCount({
-      items: data?.items,
-      truncated: data?.truncated ?? false,
-      failed: isError,
+      items,
+      truncated: monitor.truncated,
+      failed: monitor.failedHosts.length > 0,
+      // The previous host set's roster stands in while a new one loads; its count is not this one's.
+      loading: monitor.isPending || monitor.isPlaceholderData,
     }),
   };
 }
 
 export function MonitorSidebarItem({
-  host,
   theme,
   currentScreen,
   openScreen,
   openPopover,
 }: PluginSidebarItemProps) {
-  const { summary } = useAttention(host.id);
+  const { summary } = useAttention();
   const label =
     summary && summary.count > 0 ? `${summary.count}${summary.lowerBound ? "+" : ""}` : null;
   const styles = useMemo(
@@ -72,19 +85,99 @@ export function MonitorSidebarItem({
   );
 }
 
-function AttentionPopover({ host, theme, layout, openScreen }: PluginPopoverProps) {
-  const { items, summary } = useAttention(host.id);
+function openOverlayItem(openScreen: PluginPopoverProps["openScreen"], item: OverviewItem): void {
+  const token = String(Date.now());
+  requestAgentOpen({ agentId: item.id, serverId: item.host?.serverId, token });
+  openScreen({
+    screenId: MONITOR_SCREEN_ID,
+    params: { openAgent: token },
+  });
+}
+
+function AttentionPopover({ theme, layout, openScreen }: PluginPopoverProps) {
+  const { items, summary } = useAttention();
+  const monitor = useAllHostsMonitor();
+  const overview = useMemo(() => overviewItems(monitor.entries), [monitor.entries]);
+  const shown = useMemo(() => overview.slice(0, OVERVIEW_LIMIT), [overview]);
+  const [selected, setSelected] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), 15_000);
     return () => clearInterval(clock);
   }, []);
+  useEffect(() => {
+    if (selected >= shown.length) setSelected(shown.length > 0 ? 0 : -1);
+  }, [shown.length, selected]);
+  useKeyDown(
+    useCallback(
+      (event: WebKeyEvent) => {
+        // The app dismisses the popover on Escape; never fight it here.
+        if (event.key === "Escape") return;
+        if (event.key === "Enter") {
+          const item = shown[selected];
+          if (item) openOverlayItem(openScreen, item);
+          return;
+        }
+        if (event.key === "Tab") {
+          event.preventDefault();
+          setSelected((index) => moveSelection(index, shown.length, event.shiftKey ? -1 : 1));
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+          event.preventDefault();
+          setSelected((index) => moveSelection(index, shown.length, 1));
+          return;
+        }
+        if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+          event.preventDefault();
+          setSelected((index) => moveSelection(index, shown.length, -1));
+          return;
+        }
+        const jump = digitIndex(event.key);
+        if (jump !== null && jump < shown.length) {
+          const item = shown[jump];
+          setSelected(jump);
+          if (item) openOverlayItem(openScreen, item);
+        }
+      },
+      [shown, selected, openScreen],
+    ),
+    // The popover can open over the monitor's overview; only it handles keys then.
+    true,
+  );
   const styles = useMemo(
     () => ({
-      root: { gap: layout.compact ? 10 : 6 },
+      root: { gap: layout.compact ? 10 : 6, minWidth: 300 },
       heading: { color: theme.colors.foreground, fontSize: 13, fontWeight: "600" as const },
       detail: { color: theme.colors.foregroundMuted, fontSize: 12 },
-      row: { flexDirection: "row" as const, alignItems: "center" as const, gap: 8 },
+      sectionHead: {
+        color: theme.colors.foregroundMuted,
+        fontSize: 11,
+        fontWeight: "600" as const,
+        marginTop: 6,
+      },
+      rowPress: {
+        flexDirection: "row" as const,
+        alignItems: "center" as const,
+        gap: 8,
+        paddingVertical: 4,
+        paddingHorizontal: 6,
+        borderRadius: 8,
+      },
+      rowSelected: {
+        backgroundColor: theme.colors.surface2,
+      },
+      badge: {
+        minWidth: 20,
+        alignItems: "center" as const,
+        borderRadius: 6,
+        backgroundColor: theme.colors.surface2,
+        paddingHorizontal: 5,
+        paddingVertical: 1,
+      },
+      badgeText: { color: theme.colors.foregroundMuted, fontSize: 11 },
+      rowBody: { flex: 1, gap: 1 },
+      rowTitleLine: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6 },
       rowTitle: { flex: 1, color: theme.colors.foreground, fontSize: 13 },
       rowState: { color: theme.colors.foregroundMuted, fontSize: 12 },
       action: {
@@ -99,33 +192,94 @@ function AttentionPopover({ host, theme, layout, openScreen }: PluginPopoverProp
     }),
     [theme, layout.compact],
   );
-  const shown: readonly AttentionItem[] = items?.slice(0, POPOVER_LIMIT) ?? [];
-  const hidden = (items?.length ?? 0) - shown.length;
+  const hidden = overview.length - shown.length;
+  const runningCount = overview.filter((item) => !item.needsAttention).length;
   let heading = "Checking agents…";
   if (summary) {
-    heading =
+    const attention =
       summary.count === 0
         ? summary.lowerBound
           ? "None of the newest agents need attention; older ones were not checked"
           : "No agents need attention"
         : `${summary.count}${summary.lowerBound ? "+" : ""} need attention`;
+    heading =
+      runningCount > 0 && summary.count > 0 ? `${attention} · ${runningCount} running` : attention;
   } else if (items) {
     heading = "Attention list may be out of date";
   }
   return (
     <View style={styles.root}>
       <Text style={styles.heading}>{heading}</Text>
-      {shown.map((item) => (
-        <View key={item.id} style={styles.row}>
-          <Text style={styles.rowTitle} numberOfLines={1} ellipsizeMode="tail">
-            {item.title}
-          </Text>
-          <Text style={styles.rowState}>
-            {item.state} · {age(item.since, now)}
-          </Text>
-        </View>
-      ))}
+      {shown.map((item, index) => {
+        const color = item.host ? hostColor(item.host) : theme.colors.foregroundMuted;
+        const isSelected = index === selected;
+        const startsAttention = index === 0 && item.needsAttention;
+        const startsRunning = index > 0 && !item.needsAttention && shown[index - 1]?.needsAttention;
+        return (
+          <Fragment key={item.id}>
+            {startsAttention ? <Text style={styles.sectionHead}>Needs attention</Text> : null}
+            {startsRunning ? <Text style={styles.sectionHead}>Running</Text> : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${item.title}`}
+              onPress={() => {
+                setSelected(index);
+                openOverlayItem(openScreen, item);
+              }}
+              style={[styles.rowPress, isSelected ? styles.rowSelected : null]}
+            >
+              {index < 9 ? (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{index + 1}</Text>
+                </View>
+              ) : (
+                <View
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 4,
+                    backgroundColor: item.needsAttention
+                      ? theme.colors.statusWarning
+                      : theme.colors.foregroundMuted,
+                  }}
+                />
+              )}
+              <View style={styles.rowBody}>
+                <View style={styles.rowTitleLine}>
+                  <Text style={styles.rowTitle} numberOfLines={1} ellipsizeMode="tail">
+                    {item.title}
+                  </Text>
+                  {item.host ? (
+                    <View
+                      accessibilityLabel={`Host ${item.host.label}`}
+                      style={{
+                        paddingHorizontal: 6,
+                        paddingVertical: 1,
+                        borderRadius: 7,
+                        borderWidth: 1,
+                        borderColor: `${color}66`,
+                        backgroundColor: `${color}26`,
+                      }}
+                    >
+                      <Text style={{ color, fontSize: 9, fontWeight: "700" }}>
+                        {item.host.label}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+                <Text style={styles.rowState} numberOfLines={1} ellipsizeMode="tail">
+                  {item.state} · {age(item.since, now)} · {item.detail}
+                </Text>
+              </View>
+            </Pressable>
+          </Fragment>
+        );
+      })}
       {hidden > 0 ? <Text style={styles.detail}>and {hidden} more</Text> : null}
+      {shown.length === 0 && summary ? (
+        <Text style={styles.detail}>No running agents right now.</Text>
+      ) : null}
+      <Text style={styles.detail}>1-9 jump straight in · Tab moves · Enter opens · Esc closes</Text>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Open monitor"
