@@ -32,6 +32,35 @@ export type MonitorDirectory = {
   projects: ProjectIndex;
 };
 
+export type HostScope = {
+  serverId: string;
+  label: string;
+};
+
+export const HOST_PALETTE = ["#7aa2f7", "#bb9af7", "#7dcfff", "#9ece6a", "#e0af68", "#f7768e"];
+
+/** A stable accent color per host, derived from the server id. */
+export function hostColor(scope: HostScope | null): string {
+  if (!scope) return "#8b8b8b";
+  let hash = 0;
+  for (let index = 0; index < scope.serverId.length; index += 1) {
+    hash = (hash * 31 + scope.serverId.charCodeAt(index)) | 0;
+  }
+  return HOST_PALETTE[Math.abs(hash) % HOST_PALETTE.length] ?? "#8b8b8b";
+}
+
+/** Entries tagged by the host they were listed from; untagged entries predate the merge. */
+export type ScopedAgentEntry = AgentEntry & { hostScope?: HostScope };
+
+export function withHostScope(entry: AgentEntry, host: HostScope): ScopedAgentEntry {
+  return { ...entry, hostScope: host };
+}
+
+export function hostOf(entry: AgentEntry): HostScope | null {
+  const scope = (entry as ScopedAgentEntry).hostScope;
+  return scope && typeof scope.serverId === "string" ? scope : null;
+}
+
 /**
  * Indexes each project under its id and its key so either identifier resolves it. A project whose
  * key collides with another project's id overwrites that entry, so the last one listed wins.
@@ -133,7 +162,14 @@ export function parseBucketParam(value: string | undefined): Bucket | null | und
 }
 
 /** The lean row the sidebar popover needs. Its fields change only when the row visibly changes. */
-export type AttentionItem = { id: string; title: string; state: string; since: number };
+export type AttentionItem = {
+  id: string;
+  title: string;
+  state: string;
+  since: number;
+  detail: string;
+  host: HostScope | null;
+};
 
 /** Agents in the attention bucket, longest-waiting first. Uses the same `bucketOf` as the screen. */
 export function attentionItems(entries: readonly AgentEntry[]): AttentionItem[] {
@@ -144,21 +180,28 @@ export function attentionItems(entries: readonly AgentEntry[]): AttentionItem[] 
       title: title(entry),
       state: stateLabel(entry.agent),
       since: waitingSince(entry.agent),
+      detail: entry.agent.model
+        ? `${entry.agent.provider} · ${entry.agent.model}`
+        : entry.agent.provider,
+      host: hostOf(entry),
     }))
     .sort((left, right) => left.since - right.since);
 }
 
 /**
- * The count to show, or null when it cannot be trusted: still loading, or the last refresh failed
- * so the cached roster may be stale. A truncated roster is a lower bound.
+ * The count to show, or null when it cannot be trusted: still loading, or a failed host left no
+ * rows at all. Otherwise a truncated roster or a failed host makes the count a lower bound,
+ * because the missing rows might include agents that need attention.
  */
 export function attentionCount(state: {
   items: readonly AttentionItem[] | undefined;
   truncated: boolean;
   failed: boolean;
+  loading?: boolean;
 }): { count: number; lowerBound: boolean } | null {
-  if (!state.items || state.failed) return null;
-  return { count: state.items.length, lowerBound: state.truncated };
+  if (!state.items) return null;
+  if (state.items.length === 0 && (state.failed || state.loading)) return null;
+  return { count: state.items.length, lowerBound: state.truncated || state.failed };
 }
 
 export function stateLabel(agent: AgentSnapshot): string {
@@ -206,6 +249,7 @@ export function title(entry: AgentEntry): string {
 export function matches(entry: AgentEntry, needle: string): boolean {
   if (needle.length === 0) return true;
   return [
+    hostOf(entry)?.label ?? "",
     entry.agent.title ?? "",
     entry.agent.id,
     entry.agent.provider,
@@ -441,4 +485,54 @@ export function childCounts(
     if (parentId) counts.set(parentId, (counts.get(parentId) ?? 0) + 1);
   }
   return counts;
+}
+
+/**
+ * The cross-host project name: registry display names may carry a per-host
+ * suffix ("ACME · alpha") because the core sidebar cannot unify non-git
+ * projects. The monitor groups by the base name so one project reads as one
+ * group however many hosts list it.
+ */
+export function baseProjectName(name: string): string {
+  const separator = name.indexOf(" · ");
+  return separator < 0 ? name : name.slice(0, separator).trim() || name;
+}
+
+/** The graph panel key: like `placement` but on the base project name, so one project reads as one panel however many hosts list it. */
+export function panelKey(entry: AgentEntry): string {
+  const base = baseProjectName(entry.project.projectName);
+  const workspace = entry.project.workspaceName?.trim();
+  return workspace && workspace !== entry.project.projectName ? `${base} / ${workspace}` : base;
+}
+
+export type HostedProjectGroups = {
+  host: HostScope;
+  projects: ProjectGroup[];
+};
+
+/**
+ * Merge per-host project groups by base name. Groups from different hosts that
+ * share a base name become one group; its workspaces keep their host, which
+ * the UI reads back off each workspace's entries.
+ */
+export function mergeProjectGroupsAcrossHosts(all: readonly HostedProjectGroups[]): ProjectGroup[] {
+  const merged = new Map<string, ProjectGroup>();
+  for (const { projects } of all) {
+    for (const project of projects) {
+      const name = baseProjectName(project.name);
+      const existing = merged.get(name);
+      if (!existing) {
+        merged.set(name, {
+          ...project,
+          id: name,
+          name,
+          workspaces: [...project.workspaces],
+        });
+        continue;
+      }
+      existing.workspaces = [...existing.workspaces, ...project.workspaces];
+      existing.pinned = existing.pinned || project.pinned;
+    }
+  }
+  return [...merged.values()].sort((left, right) => left.name.localeCompare(right.name));
 }

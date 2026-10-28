@@ -1,5 +1,12 @@
-import type { AgentEntry } from "./monitor";
-import { parentAgentId, placement, stateLabel, title } from "./monitor";
+import {
+  type AgentEntry,
+  type HostScope,
+  hostOf,
+  panelKey,
+  parentAgentId,
+  stateLabel,
+  title,
+} from "./monitor";
 
 export type GraphEdgeKind = "tree" | "message" | "subagent";
 
@@ -37,6 +44,8 @@ export type GraphNode = {
   status: string;
   /** Stable color key: project + workspace. */
   colorKey: string;
+  /** The host the agent runs on; subagent nodes inherit the parent host. */
+  host: HostScope | null;
   messageCount: number;
   childCount: number;
   parentId: string | null;
@@ -128,8 +137,12 @@ export function buildGraph(
   options: GraphOptions = {},
 ): GraphLayout {
   const nodes: GraphNode[] = entries.map((entry) => {
+    const scope = hostOf(entry)?.serverId ?? hostId;
+    const nodeHost = hostOf(entry);
     const childAgents = entries.filter(
-      (candidate) => parentAgentId(candidate.agent, hostId) === entry.agent.id,
+      (candidate) =>
+        (hostOf(candidate)?.serverId ?? hostId) === scope &&
+        parentAgentId(candidate.agent, scope) === entry.agent.id,
     ).length;
     return {
       id: entry.agent.id,
@@ -138,10 +151,11 @@ export function buildGraph(
       repo: repoLabel(entry),
       meta: `${entry.agent.provider}${entry.agent.model ? ` · ${entry.agent.model}` : ""} · ${stateLabel(entry.agent)}`,
       status: stateLabel(entry.agent),
-      colorKey: placement(entry),
+      colorKey: panelKey(entry),
+      host: nodeHost,
       messageCount: interactions?.messagesByAgent.get(entry.agent.id) ?? 0,
       childCount: childAgents,
-      parentId: parentAgentId(entry.agent, hostId),
+      parentId: parentAgentId(entry.agent, scope),
       agentId: entry.agent.id,
       entry,
       x: 0,
@@ -181,6 +195,7 @@ export function buildGraph(
         meta: `${subagent.kind} · ${subagent.count} calls`,
         status: "subagent",
         colorKey: parent.colorKey,
+        host: parent.host,
         messageCount: subagent.count,
         childCount: 0,
         parentId: parent.id,
@@ -266,4 +281,64 @@ export function buildGraph(
     (edge) => byId.has(edge.from) && byId.has(edge.to),
   );
   return { nodes, byId, edges: finalEdges, clusters: clusterSummaries, width, height };
+}
+
+export const CLUSTER_PAD = 20;
+export const CLUSTER_HEADER = 30;
+
+export type ClusterBox = {
+  key: string;
+  name: string;
+  count: number;
+  hosts: string[];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+/**
+ * Bounding box of each project panel over the cards current positions, so the
+ * container hugs the cards even after a drag. The box must span every card: if
+ * the top is computed from the bottom-most card the panel shrinks onto the last
+ * row and its header sits on top of the rows above it.
+ */
+export function buildClusterBoxes(
+  nodes: GraphNode[],
+  positionOf: (node: GraphNode) => { x: number; y: number } = (node) => ({ x: node.x, y: node.y }),
+): ClusterBox[] {
+  const groups = new Map<string, GraphNode[]>();
+  for (const node of nodes) {
+    const list = groups.get(node.colorKey);
+    if (list) list.push(node);
+    else groups.set(node.colorKey, [node]);
+  }
+  const boxes: ClusterBox[] = [];
+  for (const [key, group] of groups) {
+    let left = Number.POSITIVE_INFINITY;
+    let top = Number.POSITIVE_INFINITY;
+    let right = Number.NEGATIVE_INFINITY;
+    let bottom = Number.NEGATIVE_INFINITY;
+    const hosts = new Set<string>();
+    for (const node of group) {
+      if (node.host) hosts.add(node.host.label);
+      const position = positionOf(node);
+      left = Math.min(left, position.x);
+      top = Math.min(top, position.y);
+      right = Math.max(right, position.x + NODE_WIDTH);
+      bottom = Math.max(bottom, position.y + NODE_HEIGHT);
+    }
+    if (!Number.isFinite(left)) continue;
+    boxes.push({
+      key,
+      name: key.split(" · ")[0] || key,
+      count: group.length,
+      hosts: [...hosts].sort(),
+      x: left - CLUSTER_PAD,
+      y: top - CLUSTER_HEADER - CLUSTER_PAD,
+      width: right - left + CLUSTER_PAD * 2,
+      height: bottom - top + CLUSTER_PAD * 2 + CLUSTER_HEADER,
+    });
+  }
+  return boxes.sort((left, right) => left.name.localeCompare(right.name));
 }
