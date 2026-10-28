@@ -118,13 +118,63 @@ export function AgentOverview(props: {
         marginTop: 8,
       },
       detailText: { color: props.theme.colors.foregroundMuted, fontSize: 12, marginTop: 4 },
+      sectionHead: {
+        color: props.theme.colors.foregroundMuted,
+        fontSize: 11,
+        fontWeight: "600" as const,
+        marginTop: 16,
+      },
       hint: { color: props.theme.colors.foregroundMuted, fontSize: 12, marginTop: 16 },
       empty: { color: props.theme.colors.foregroundMuted, fontSize: 13, marginTop: 16 },
     }),
     [props.layout.compact, props.theme],
   );
 
-  const attention = items.filter((item) => item.needsAttention).length;
+  const attention = items.filter((item) => item.needsAttention);
+  const running = items.filter((item) => !item.needsAttention);
+  const renderCard = (item: OverviewItem, index: number) => {
+    const color = item.host ? hostColor(item.host) : props.theme.colors.foregroundMuted;
+    const isSelected = index === selected;
+    return (
+      <Pressable
+        key={item.id}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${item.title}`}
+        onPress={() => {
+          setSelected(index);
+          openItem(props.navigation, item);
+        }}
+        style={[
+          styles.card,
+          item.needsAttention ? styles.cardAttention : null,
+          isSelected ? styles.cardSelected : null,
+        ]}
+      >
+        <View style={styles.topRow}>
+          {index < 9 ? (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{index + 1}</Text>
+            </View>
+          ) : null}
+          <Text style={styles.detailText} numberOfLines={1}>
+            {item.state}
+            {item.needsAttention ? ` · ${age(item.since, now)}` : null}
+          </Text>
+          {item.host ? (
+            <View style={[styles.pill, { backgroundColor: `${color}22` }]}>
+              <Text style={[styles.pillText, { color }]}>{item.host.label}</Text>
+            </View>
+          ) : null}
+        </View>
+        <Text style={styles.titleText} numberOfLines={2}>
+          {item.title}
+        </Text>
+        <Text style={styles.detailText} numberOfLines={1}>
+          {item.detail}
+        </Text>
+      </Pressable>
+    );
+  };
   return (
     <View style={styles.screen}>
       <Text style={styles.heading}>Agents</Text>
@@ -134,51 +184,22 @@ export function AgentOverview(props: {
       {items.length === 0 && !monitor.isPending ? (
         <Text style={styles.empty}>No running agents right now.</Text>
       ) : null}
-      <View style={styles.grid}>
-        {items.map((item, index) => {
-          const color = item.host ? hostColor(item.host) : props.theme.colors.foregroundMuted;
-          const isSelected = index === selected;
-          return (
-            <Pressable
-              key={item.id}
-              accessibilityRole="button"
-              accessibilityLabel={`Open ${item.title}`}
-              onPress={() => {
-                setSelected(index);
-                openItem(props.navigation, item);
-              }}
-              style={[
-                styles.card,
-                item.needsAttention ? styles.cardAttention : null,
-                isSelected ? styles.cardSelected : null,
-              ]}
-            >
-              <View style={styles.topRow}>
-                {index < 9 ? (
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>{index + 1}</Text>
-                  </View>
-                ) : null}
-                <Text style={styles.detailText} numberOfLines={1}>
-                  {item.state}
-                  {item.needsAttention ? ` · ${age(item.since, now)}` : ""}
-                </Text>
-                {item.host ? (
-                  <View style={[styles.pill, { backgroundColor: `${color}22` }]}>
-                    <Text style={[styles.pillText, { color }]}>{item.host.label}</Text>
-                  </View>
-                ) : null}
-              </View>
-              <Text style={styles.titleText} numberOfLines={2}>
-                {item.title}
-              </Text>
-              <Text style={styles.detailText} numberOfLines={1}>
-                {item.detail}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      {attention.length > 0 ? (
+        <>
+          <Text style={styles.sectionHead}>Needs attention</Text>
+          <View style={styles.grid}>
+            {attention.map((item) => renderCard(item, items.indexOf(item)))}
+          </View>
+        </>
+      ) : null}
+      {running.length > 0 ? (
+        <>
+          <Text style={styles.sectionHead}>Running</Text>
+          <View style={styles.grid}>
+            {running.map((item) => renderCard(item, items.indexOf(item)))}
+          </View>
+        </>
+      ) : null}
       <Text style={styles.hint}>
         1-9 jump straight in · Tab moves · Enter opens · Esc backs out
       </Text>
