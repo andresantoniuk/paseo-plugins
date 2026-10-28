@@ -22,8 +22,6 @@ remained in the rendered page.
 
 ## Install
 
-### Paseo 0.9.0 or 0.10.1
-
 Install the npm package:
 
 ```bash
@@ -36,7 +34,7 @@ Update an npm installation by its plugin ID:
 paseo plugin update tell-agent
 ```
 
-Paseo 0.9 and 0.10 use the reviewed update flow to show the current and proposed revisions before asking for approval. Add `--check` to preview without applying or `--yes` to skip the approval prompt.
+Updates use the reviewed update flow to show the current and proposed revisions before asking for approval. Add `--check` to preview without applying or `--yes` to skip the approval prompt.
 
 ## Use
 
@@ -60,7 +58,7 @@ On Paseo 0.12 and later, agents in background workspaces are hidden from discove
 
 The plugin asks the source agent to forward the message to the resolved target. The source agent remains responsible for executing that instruction; the plugin does not inject the text directly into the target session.
 
-If the source agent is busy, `/tell` and the Tell agent panel send that instruction with `activeTurnBehavior: "steer"`. Paseo tries to add it to the running turn instead of interrupting it, and the agent picks it up at its next step, which can be after its current tool call finishes. Steering is best effort: Paseo still replaces the turn when the provider cannot steer. Paseo 0.9 and later hosts accept both the steer and interrupt behaviors. Put `--interrupt` first to replace the source agent's current turn instead:
+If the source agent is busy, `/tell` and the Tell agent panel send that instruction with `activeTurnBehavior: "steer"`. Paseo tries to add it to the running turn instead of interrupting it, and the agent picks it up at its next step, which can be after its current tool call finishes. Steering is best effort: Paseo still replaces the turn when the provider cannot steer. All supported Paseo hosts accept both the steer and interrupt behaviors. Put `--interrupt` first to replace the source agent's current turn instead:
 
 ```text
 /tell --interrupt Payments :: Stop and review the authentication change.
