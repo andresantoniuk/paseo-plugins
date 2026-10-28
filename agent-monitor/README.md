@@ -64,9 +64,9 @@ screenshot uses the same synthetic project and agent names.
   The graph adds a host filter row, shows the host in node details, and opens agents and workspaces
   on their own host through the navigation `serverId`. Timeline sweeps run per host and merge, and
   archive fans out to the owning host of each agent. A host that fails to load is named in a
-  warning while the rest keep working; the sidebar badge counts every online host. Every agent card
-  carries a host pill in the host's color, panels spanning hosts list them, and workspace and
-  project headers name their hosts, so each agent's host is visible at a glance.
+  warning while the rest keep working; the sidebar badge counts every online host. Graph cards and
+  workspace headers carry a host pill in the host's color when more than one host is shown, panels
+  spanning hosts list them, and project headers name their hosts.
 - **Agent overview**: a Mission Control grid with every running or attention-needing agent, summoned
   from the command center. `1-9` jump straight to an agent, `Tab` or arrows move the selection,
   `Enter` opens, `Esc` backs out. `Next agent` / `Previous agent` commands cycle the same list with

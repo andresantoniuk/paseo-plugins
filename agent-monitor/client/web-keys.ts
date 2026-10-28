@@ -34,21 +34,31 @@ export function isTyping(target: WebKeyTarget | null, key: string): boolean {
   );
 }
 
+// Mounted modal listeners (the quick-access popover). While any is mounted, it
+// owns the keyboard and the screens underneath stop handling keys.
+let modalOwners = 0;
+
 /**
  * Window keydown listener (web only). Re-subscribes when the handler changes.
  * Ctrl, Meta and Alt chords belong to the browser and app (reload, copy), so
- * they never reach the handler; Shift does (Shift+Tab).
+ * they never reach the handler. A `modal` listener takes the keyboard from the
+ * others while it is mounted, so one key never drives two surfaces.
  */
-export function useKeyDown(handler: (event: WebKeyEvent) => void): void {
+export function useKeyDown(handler: (event: WebKeyEvent) => void, modal = false): void {
   useEffect(() => {
     const win = webWindow();
     if (!win) return;
+    if (modal) modalOwners += 1;
     const onKeyDown = (event: WebKeyEvent) => {
+      if (!modal && modalOwners > 0) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (isTyping(event.target, event.key)) return;
       handler(event);
     };
     win.addEventListener("keydown", onKeyDown);
-    return () => win.removeEventListener("keydown", onKeyDown);
-  }, [handler]);
+    return () => {
+      win.removeEventListener("keydown", onKeyDown);
+      if (modal) modalOwners -= 1;
+    };
+  }, [handler, modal]);
 }

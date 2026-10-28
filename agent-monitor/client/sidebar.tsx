@@ -141,6 +141,8 @@ function AttentionPopover({ theme, layout, openScreen }: PluginPopoverProps) {
       },
       [shown, selected, openScreen],
     ),
+    // The popover can open over the monitor's overview; only it handles keys then.
+    true,
   );
   const styles = useMemo(
     () => ({

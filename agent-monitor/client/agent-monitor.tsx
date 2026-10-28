@@ -13,7 +13,13 @@ import {
 } from "react-native";
 import { initialBucket, type MonitorSettings, monitorSettings } from "../shared/monitor-settings";
 import { DiffStat, type DiffStatStyles } from "./diff-stat";
-import { peekAgentFocus, requestAgentFocus, takeAgentFocus, takeAgentOpen } from "./focus-request";
+import {
+  peekAgentFocus,
+  peekAgentOpen,
+  requestAgentFocus,
+  takeAgentFocus,
+  takeAgentOpen,
+} from "./focus-request";
 import { useAllHostsInteractionGraph } from "./graph-data";
 import { AgentGraph } from "./graph-view";
 import {
@@ -85,14 +91,16 @@ export function AgentMonitor(props: AgentMonitorProps) {
   // user sees the roster, never a blank screen. Hosts without navigation fall
   // back to the graph focus deep link.
   useLayoutEffect(() => {
-    const request = takeAgentOpen();
-    // The token arrives as a screen param; without it this monitor open has
-    // nothing to hand off. Taking unconditionally keeps a stale request from
-    // firing on a later, unrelated visit.
-    if (!request || request.token !== props.openAgentToken) return;
+    // The token arrives as a screen param and ties this open to the request; a
+    // stale request never matches a later visit's token (or its absence).
+    const pending = peekAgentOpen();
+    if (!pending || pending.token !== props.openAgentToken) return;
     // Defer past this commit: a navigate dispatched while the pushed monitor
-    // route is still being committed is dropped by the router.
+    // route is still being committed is dropped by the router. Take inside the
+    // timer so an effect re-run before the tick cannot drop the request.
     const handoff = setTimeout(() => {
+      const request = takeAgentOpen();
+      if (!request || request.token !== props.openAgentToken) return;
       if (props.navigation) {
         try {
           props.navigation.openAgent({ agentId: request.agentId, serverId: request.serverId });
@@ -363,29 +371,16 @@ function AgentMonitorRoster({
     });
   }, [entries, needle, selected, settings]);
   const roster = useMemo(() => {
+    // Compact and workspace rosters sort across every host at once: entries
+    // resolve parent links against their own host. Project groups build per
+    // host (project ids are daemon scoped) and merge by name afterwards.
+    if (settings.grouping !== "project") {
+      return buildRoster(visibleEntries, directory, settings, hosts[0]?.serverId ?? "");
+    }
     const scopedEntries = (host: HostScope) =>
       visibleEntries.filter(
         (entry) => (hostOf(entry)?.serverId ?? host.serverId) === host.serverId,
       );
-    // One roster per host keeps parent links, sorting and pinning scoped the
-    // way buildRoster expects; project groups merge across hosts by base name
-    // afterwards so one project still reads as one group.
-    if (settings.grouping === "compact") {
-      const compactEntries: AgentEntry[] = [];
-      for (const host of hosts) {
-        const roster = buildRoster(scopedEntries(host), directory, settings, host.serverId);
-        if (roster.kind === "compact") compactEntries.push(...roster.entries);
-      }
-      return { kind: "compact" as const, entries: compactEntries };
-    }
-    if (settings.grouping === "workspace") {
-      const workspaceGroups: WorkspaceGroup[] = [];
-      for (const host of hosts) {
-        const roster = buildRoster(scopedEntries(host), directory, settings, host.serverId);
-        if (roster.kind === "workspace") workspaceGroups.push(...roster.groups);
-      }
-      return { kind: "workspace" as const, groups: workspaceGroups };
-    }
     const perHost = hosts.map((host: HostScope) => ({
       host,
       projects: groupByProject(scopedEntries(host), directory, {
@@ -702,7 +697,7 @@ function AgentMonitorRoster({
   );
 
   const renderWorkspaceHeader = useCallback(
-    (workspace: WorkspaceSummary, host?: HostScope) => {
+    (workspace: WorkspaceSummary, host?: HostScope, showHost = false) => {
       const navigationId = workspace.navigationId;
       const content = (
         <>
@@ -715,7 +710,7 @@ function AgentMonitorRoster({
             <Text style={styles.workspaceTitle} numberOfLines={1} ellipsizeMode="tail">
               {workspace.name}
             </Text>
-            {host ? (
+            {host && showHost ? (
               <View
                 accessibilityLabel={`Host ${host.label}`}
                 style={{
@@ -774,11 +769,10 @@ function AgentMonitorRoster({
       const collapse = project
         ? shouldCollapseWorkspace(project, group.workspace, settings.collapseMatchingWorkspace)
         : false;
-      const scope =
-        multiHost && group.entries.length > 0 ? (hostOf(group.entries[0]) ?? undefined) : undefined;
+      const scope = group.entries.length > 0 ? (hostOf(group.entries[0]) ?? undefined) : undefined;
       return (
         <View key={group.workspace.id}>
-          {collapse ? null : renderWorkspaceHeader(group.workspace, scope)}
+          {collapse ? null : renderWorkspaceHeader(group.workspace, scope, multiHost)}
           {group.entries.map((entry) => (
             <View
               key={entry.agent.id}

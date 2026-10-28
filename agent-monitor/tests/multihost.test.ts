@@ -5,6 +5,7 @@ import { mergeHostInteractions } from "../client/graph-data";
 import {
   type AgentEntry,
   baseProjectName,
+  buildRoster,
   type GroupOptions,
   groupByProject,
   HOST_PALETTE,
@@ -91,6 +92,38 @@ function interactions(overrides: Partial<InteractionData> = {}): InteractionData
     ...overrides,
   };
 }
+
+describe("cross-host roster order", () => {
+  test("compact triage sorts across hosts and resolves children on their own host", () => {
+    const idleAlpha = withHostScope(entry({ id: "a-idle", title: "a idle" }), HOST_ALPHA);
+    const parentBeta = withHostScope(entry({ id: "b-parent", title: "b parent" }), HOST_BETA);
+    const childBeta = withHostScope(
+      entry({
+        id: "b-child",
+        title: "a child",
+        labels: { "paseo.parent-agent-id": "b-parent", "paseo.parent-server-id": "srv-beta" },
+      }),
+      HOST_BETA,
+    );
+    const attentionBeta = withHostScope(
+      entry({ id: "b-attention", title: "z attention", requiresAttention: true }),
+      HOST_BETA,
+    );
+    const roster = buildRoster(
+      [idleAlpha, childBeta, parentBeta, attentionBeta],
+      { workspaces: new Map(), projects: new Map() },
+      { grouping: "compact", floatPinned: false, agentSort: "triage" },
+      HOST_ALPHA.serverId,
+    );
+
+    expect(roster.kind === "compact" && roster.entries.map((item) => item.agent.id)).toEqual([
+      "b-attention",
+      "a-idle",
+      "b-parent",
+      "b-child",
+    ]);
+  });
+});
 
 describe("host scope", () => {
   test("tags entries and reads the scope back", () => {
@@ -420,6 +453,36 @@ describe("mergeProjectGroupsAcrossHosts", () => {
     );
 
     expect(merged.map((project) => project.name)).toEqual(["infra", "intel"]);
+  });
+
+  test("keeps same-name projects on one host apart under their own ids", () => {
+    const merged = mergeProjectGroupsAcrossHosts(
+      [
+        {
+          host: HOST_ALPHA,
+          projects: groupByProject(
+            [
+              entry({ id: "w1", workspaceId: "ws-1" }, { projectName: "web" }),
+              entry({ id: "w2", workspaceId: "ws-2" }, { projectName: "web" }),
+            ],
+            {
+              workspaces: new Map([
+                ["ws-1", workspace("ws-1", "web", "prj-1")],
+                ["ws-2", workspace("ws-2", "web", "prj-2")],
+              ]),
+              projects: indexProjects([
+                { id: "prj-1", name: "web" },
+                { id: "prj-2", name: "web" },
+              ]),
+            },
+            OPTIONS,
+          ),
+        },
+      ],
+      OPTIONS,
+    );
+
+    expect(merged.map((project) => project.id).sort()).toEqual(["prj-1", "prj-2"]);
   });
 
   test("orders merged projects by the user's sort, floating pinned ones first", () => {

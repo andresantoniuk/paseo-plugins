@@ -277,10 +277,13 @@ function compareBySort(left: AgentEntry, right: AgentEntry, agentSort: AgentSort
   return byBucket === 0 ? waitingSince(right.agent) - waitingSince(left.agent) : byBucket;
 }
 
+/** `hostId` is the fallback for entries without a host scope; scoped entries resolve their own. */
 export function sortEntries(entries: AgentEntry[], agentSort: AgentSort, hostId: string): void {
+  const isChild = (entry: AgentEntry) =>
+    parentAgentId(entry.agent, hostOf(entry)?.serverId ?? hostId) !== null;
   entries.sort((left, right) => {
-    const leftChild = parentAgentId(left.agent, hostId) !== null;
-    const rightChild = parentAgentId(right.agent, hostId) !== null;
+    const leftChild = isChild(left);
+    const rightChild = isChild(right);
     if (leftChild !== rightChild) return leftChild ? 1 : -1;
     return compareBySort(left, right, agentSort);
   });
@@ -518,8 +521,10 @@ export type HostedProjectGroups = {
 
 /**
  * Merge per-host project groups by base name. Groups from different hosts that
- * share a base name become one group; its workspaces keep their host, which
- * the UI reads back off each workspace's entries.
+ * share a base name become one group under that name; its workspaces keep their
+ * host, which the UI reads back off each workspace's entries. Same-name projects
+ * on one host stay apart (the n-th on each host pairs up), and a group that
+ * merges with nothing keeps its own id and name.
  */
 export function mergeProjectGroupsAcrossHosts(
   all: readonly HostedProjectGroups[],
@@ -527,18 +532,19 @@ export function mergeProjectGroupsAcrossHosts(
 ): ProjectGroup[] {
   const merged = new Map<string, ProjectGroup>();
   for (const { projects } of all) {
+    const seen = new Map<string, number>();
     for (const project of projects) {
       const name = baseProjectName(project.name);
-      const existing = merged.get(name);
+      const occurrence = seen.get(name) ?? 0;
+      seen.set(name, occurrence + 1);
+      const key = `${name}#${occurrence}`;
+      const existing = merged.get(key);
       if (!existing) {
-        merged.set(name, {
-          ...project,
-          id: name,
-          name,
-          workspaces: [...project.workspaces],
-        });
+        merged.set(key, { ...project, workspaces: [...project.workspaces] });
         continue;
       }
+      existing.id = key;
+      existing.name = name;
       existing.workspaces = [...existing.workspaces, ...project.workspaces];
       existing.pinned = existing.pinned || project.pinned;
     }

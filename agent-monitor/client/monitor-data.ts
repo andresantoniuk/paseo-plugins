@@ -228,6 +228,9 @@ export function useAllHostsMonitor(): MultiHostMonitor {
       };
     },
     staleTime: 20_000,
+    // A host going online or offline changes the key; keep the last roster on
+    // screen (and the badge up) until the new host set loads.
+    placeholderData: (previous) => previous,
   });
   const data = query.data;
   return {
