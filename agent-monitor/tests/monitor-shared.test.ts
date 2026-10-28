@@ -625,6 +625,8 @@ describe("attention summary", () => {
     expect(
       attentionCount({ items: [], truncated: false, failed: false, loading: true }),
     ).toBeNull();
+    // A stand-in roster from the previous host set is still loading: its count is not this one's.
+    expect(attentionCount({ items, truncated: false, failed: false, loading: true })).toBeNull();
     expect(attentionCount({ items, truncated: false, failed: false })).toEqual({
       count: 1,
       lowerBound: false,

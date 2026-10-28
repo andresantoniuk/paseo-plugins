@@ -33,7 +33,8 @@ function useAttention() {
       items,
       truncated: monitor.truncated,
       failed: monitor.failedHosts.length > 0,
-      loading: monitor.isPending,
+      // The previous host set's roster stands in while a new one loads; its count is not this one's.
+      loading: monitor.isPending || monitor.isPlaceholderData,
     }),
   };
 }

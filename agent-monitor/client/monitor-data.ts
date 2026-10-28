@@ -110,6 +110,8 @@ export type MultiHostMonitor = {
   failedHosts: string[];
   isPending: boolean;
   isFetching: boolean;
+  /** True while the previous host set's roster stands in for a new one that is still loading. */
+  isPlaceholderData: boolean;
   refetchAll: () => void;
 };
 
@@ -244,6 +246,7 @@ export function useAllHostsMonitor(): MultiHostMonitor {
     failedHosts: data?.failedHosts ?? [],
     isPending: query.isPending,
     isFetching: query.isFetching,
+    isPlaceholderData: query.isPlaceholderData,
     refetchAll: () => void query.refetch(),
   };
 }

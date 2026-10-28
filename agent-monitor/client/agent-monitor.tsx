@@ -99,8 +99,10 @@ export function AgentMonitor(props: AgentMonitorProps) {
     // route is still being committed is dropped by the router. Take inside the
     // timer so an effect re-run before the tick cannot drop the request.
     const handoff = setTimeout(() => {
-      const request = takeAgentOpen();
+      // Check before taking: a newer monitor open may have replaced the request.
+      const request = peekAgentOpen();
       if (!request || request.token !== props.openAgentToken) return;
+      takeAgentOpen();
       if (props.navigation) {
         try {
           props.navigation.openAgent({ agentId: request.agentId, serverId: request.serverId });

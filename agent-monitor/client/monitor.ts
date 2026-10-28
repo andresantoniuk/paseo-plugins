@@ -208,8 +208,8 @@ export function attentionCount(state: {
   failed: boolean;
   loading?: boolean;
 }): { count: number; lowerBound: boolean } | null {
-  if (!state.items) return null;
-  if (state.items.length === 0 && (state.failed || state.loading)) return null;
+  if (!state.items || state.loading) return null;
+  if (state.items.length === 0 && state.failed) return null;
   return { count: state.items.length, lowerBound: state.truncated || state.failed };
 }
 
