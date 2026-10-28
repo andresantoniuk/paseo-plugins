@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { PaseoApi } from "../client/monitor";
+import { type PaseoApi, projectIndexKey } from "../client/monitor";
 import { loadAgents, loadWorkspaces, useAllHostsMonitor } from "../client/monitor-data";
 
 const hooks = vi.hoisted(() => ({
@@ -150,6 +150,8 @@ describe("useAllHostsMonitor", () => {
       { serverId: "srv-b", label: "beta", status: "online" },
     ];
 
+    const alpha = { serverId: "srv-a", label: "alpha" };
+    const beta = { serverId: "srv-b", label: "beta" };
     const monitor = useAllHostsMonitor();
     const data = (await hooks.query?.queryFn()) as {
       entries: Array<{ id: string; hostScope?: { label: string } }>;
@@ -167,7 +169,10 @@ describe("useAllHostsMonitor", () => {
       additions: 3,
       deletions: 1,
     });
-    expect(data.directory.projects.get("p1")?.name).toBe("Renamed");
+    // The same project key on two hosts stays two records, one per host.
+    expect(data.directory.projects.get(projectIndexKey(alpha, "k1"))?.name).toBe("Renamed");
+    expect(data.directory.projects.get(projectIndexKey(beta, "k1"))?.name).toBe("Renamed");
+    expect(data.directory.projects.has("k1")).toBe(false);
 
     const cleanups = hooks.effects.map((effect) => effect()).filter(Boolean);
     await new Promise<void>((resolve) => setImmediate(resolve));

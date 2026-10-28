@@ -290,6 +290,9 @@ describe("focus request", () => {
     expect(stepCycle(-1)).toEqual({ agentId: "b", serverId: "srv-2" });
     setCycleList([]);
     expect(stepCycle(1)).toBeNull();
+
+    setCycleList([{ agentId: "x" }, { agentId: "y" }, { agentId: "z" }]);
+    expect(stepCycle(-1)).toEqual({ agentId: "z" });
   });
 });
 
@@ -345,6 +348,37 @@ describe("mergeHostDirectories", () => {
     expect(hostOf(merged.entries[1])?.serverId).toBe(HOST_BETA.serverId);
     expect([...merged.directory.workspaces.keys()].sort()).toEqual(["ws-alpha", "ws-beta"]);
     expect(merged.truncated).toBe(true);
+  });
+
+  test("an unlisted workspace resolves the project on its own host when keys repeat", () => {
+    // Same repo key on both hosts, different daemon-scoped projects; neither workspace is listed.
+    const host = (scope: HostScope, projectId: string, name: string) => ({
+      host: scope,
+      data: {
+        entries: [
+          entry(
+            { id: `${scope.label}-1`, workspaceId: undefined },
+            { projectKey: "repo", projectName: "x" },
+          ),
+        ],
+        directory: {
+          workspaces: new Map(),
+          projects: indexProjects([{ id: projectId, key: "repo", name }]),
+        },
+        truncated: false,
+      },
+    });
+    const merged = mergeHostDirectories([
+      host(HOST_ALPHA, "prj-alpha", "Alpha name"),
+      host(HOST_BETA, "prj-beta", "Beta name"),
+    ]);
+    // Alpha merges first, so a shared index would hand alpha's agent beta's project.
+    const alpha = merged.entries.filter((item) => hostOf(item)?.serverId === HOST_ALPHA.serverId);
+    const projects = groupByProject(alpha, merged.directory, OPTIONS);
+
+    expect(projects.map((project) => [project.id, project.name])).toEqual([
+      ["prj-alpha", "Alpha name"],
+    ]);
   });
 });
 

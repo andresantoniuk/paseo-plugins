@@ -62,6 +62,15 @@ export function hostOf(entry: AgentEntry): HostScope | null {
 }
 
 /**
+ * The project index key for an entry's host. Project keys repeat across hosts (the same repo
+ * registered on two daemons), so a merged directory indexes each host's projects under its server
+ * id. Unscoped entries and single-host directories use the bare key.
+ */
+export function projectIndexKey(host: HostScope | null, key: string): string {
+  return host ? `${host.serverId}\u0000${key}` : key;
+}
+
+/**
  * Indexes each project under its id and its key so either identifier resolves it. A project whose
  * key collides with another project's id overwrites that entry, so the last one listed wins.
  */
@@ -328,7 +337,7 @@ function siblingsByProjectKey(
 ): ReadonlyMap<string, WorkspaceSummary> {
   const siblings = new Map<string, WorkspaceSummary>();
   for (const entry of entries) {
-    const key = entry.project.projectKey;
+    const key = projectIndexKey(hostOf(entry), entry.project.projectKey);
     if (siblings.has(key)) continue;
     const workspace = entry.agent.workspaceId ? workspaces.get(entry.agent.workspaceId) : undefined;
     if (workspace) siblings.set(key, workspace);
@@ -345,8 +354,9 @@ function resolveWorkspace(
   const workspaceId = navigationId ?? `agent:${entry.agent.id}`;
   const known = directory.workspaces.get(workspaceId);
   if (known) return known;
-  const project = directory.projects.get(entry.project.projectKey);
-  const sibling = siblings.get(entry.project.projectKey);
+  const key = projectIndexKey(hostOf(entry), entry.project.projectKey);
+  const project = directory.projects.get(key);
+  const sibling = siblings.get(key);
   return {
     id: workspaceId,
     navigationId,
@@ -414,7 +424,9 @@ export function groupByProject(
     }
     projects.set(projectId, {
       id: projectId,
-      name: directory.projects.get(projectId)?.name ?? group.workspace.projectName,
+      name:
+        directory.projects.get(projectIndexKey(hostOf(group.entries[0]), projectId))?.name ??
+        group.workspace.projectName,
       pinned: group.workspace.pinned,
       workspaces: [group],
     });

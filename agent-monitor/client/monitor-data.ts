@@ -14,6 +14,7 @@ import {
   type PaseoApi,
   type PaseoWorkspace,
   type ProjectSummary,
+  projectIndexKey,
   type WorkspaceSummary,
   withHostScope,
 } from "./monitor";
@@ -132,8 +133,8 @@ async function loadHostDirectory(host: HostScope): Promise<MonitorData> {
 
 /**
  * Merge per-host directories. Workspace ids are daemon-scoped UUIDs and never
- * collide; project index keys can (the same repo registered on two hosts), in
- * which case hosts merge in server-id order so the result is deterministic.
+ * collide; project index keys can (the same repo registered on two hosts), so
+ * each host's projects are indexed under `projectIndexKey(host, key)`.
  */
 export function mergeHostDirectories(
   loaded: ReadonlyArray<{ host: HostScope; data: MonitorData }>,
@@ -145,7 +146,9 @@ export function mergeHostDirectories(
   for (const { host, data } of loaded) {
     for (const entry of data.entries) entries.push(withHostScope(entry, host));
     for (const [id, workspace] of data.directory.workspaces) workspaces.set(id, workspace);
-    for (const [key, project] of data.directory.projects) projects.set(key, project);
+    for (const [key, project] of data.directory.projects) {
+      projects.set(projectIndexKey(host, key), project);
+    }
     truncated = truncated || data.truncated;
   }
   return { entries, directory: { workspaces, projects }, truncated };

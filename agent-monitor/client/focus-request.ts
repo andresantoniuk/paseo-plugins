@@ -69,6 +69,8 @@ export function setCycleList(targets: readonly CycleTarget[]): void {
 /** Step the pointer and return the target, wrapping around. Null when empty. */
 export function stepCycle(delta: 1 | -1): CycleTarget | null {
   if (cycleList.length === 0) return null;
-  cycleIndex = (((cycleIndex + delta) % cycleList.length) + cycleList.length) % cycleList.length;
+  // An unstarted pointer (-1) steps back from the first item, so Previous lands on the last one.
+  const from = cycleIndex < 0 && delta < 0 ? 0 : cycleIndex;
+  cycleIndex = (((from + delta) % cycleList.length) + cycleList.length) % cycleList.length;
   return cycleList[cycleIndex] ?? null;
 }
