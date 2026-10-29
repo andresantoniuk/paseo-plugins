@@ -21,8 +21,15 @@ type WebWindow = {
 };
 
 function webWindow(): WebWindow | null {
-  const candidate = (globalThis as { window?: unknown }).window;
-  return candidate !== null && typeof candidate === "object" ? (candidate as WebWindow) : null;
+  const candidate = (globalThis as { window?: Partial<WebWindow> | null }).window;
+  // Having a `window` object is not enough: React Native defines one with no addEventListener, and calling it threw
+  // "undefined is not a function", which failed the whole plugin on Android. Use it only if it can listen.
+  return candidate !== null &&
+    typeof candidate === "object" &&
+    typeof candidate.addEventListener === "function" &&
+    typeof candidate.removeEventListener === "function"
+    ? (candidate as WebWindow)
+    : null;
 }
 
 /** True when the keydown started in an editable element. Escape is never typing. */
