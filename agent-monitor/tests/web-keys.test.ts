@@ -73,7 +73,9 @@ describe("useKeyDown", () => {
   });
 
   test("a window with only addEventListener is not used either, so cleanup cannot throw", () => {
-    vi.stubGlobal("window", { addEventListener: vi.fn() });
-    expect(() => useKeyDown(vi.fn())).not.toThrow();
+    const addEventListener = vi.fn();
+    vi.stubGlobal("window", { addEventListener });
+    useKeyDown(vi.fn());
+    expect(addEventListener).not.toHaveBeenCalled();
   });
 });
