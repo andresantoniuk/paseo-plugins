@@ -144,15 +144,28 @@ export function AgentMonitor(props: AgentMonitorProps) {
     [props.layout.compact, props.theme],
   );
 
+  // Layout clicks may arrive faster than a settings save resolves. Queue the
+  // patch and save it once the previous write lands, so the second choice is
+  // not rejected against a stale revision and silently dropped.
+  const [pendingLayout, setPendingLayout] = useState<Partial<
+    Pick<MonitorSettings, "grouping" | "agentSort">
+  > | null>(null);
+  useEffect(() => {
+    if (!pendingLayout || !settingsAreReady(settingsState) || settingsState.saving) return;
+    const state = settingsState;
+    const patch = pendingLayout;
+    setPendingLayout(null);
+    void state.save({ ...state.values, ...patch }, state.revision);
+  }, [pendingLayout, settingsState]);
+
   if (settingsAreReady(settingsState)) {
     const state = settingsState;
     return (
       <AgentMonitorRoster
         {...props}
         settings={state.values}
-        onChangeLayout={(patch) => {
-          void state.save({ ...state.values, ...patch }, state.revision);
-        }}
+        saveError={state.saveError}
+        onChangeLayout={(patch) => setPendingLayout((current) => ({ ...current, ...patch }))}
       />
     );
   }
@@ -240,9 +253,11 @@ function AgentMonitorRoster({
   agentParam,
   viewParam,
   settings,
+  saveError,
   onChangeLayout,
 }: AgentMonitorProps & {
   settings: MonitorSettings;
+  saveError?: string | null;
   onChangeLayout(patch: Partial<Pick<MonitorSettings, "grouping" | "agentSort">>): void;
 }) {
   const monitor = useAllHostsMonitor();
@@ -1214,6 +1229,7 @@ function AgentMonitorRoster({
           </View>
         ) : null}
       </View>
+      {saveError ? <Text style={styles.error}>{saveError}</Text> : null}
       {failedHosts.length > 0 ? (
         <Text style={styles.error}>
           {failedHosts.join(", ")} unreachable, showing the remaining hosts
