@@ -1229,7 +1229,11 @@ function AgentMonitorRoster({
           </View>
         ) : null}
       </View>
-      {saveError ? <Text style={styles.error}>{saveError}</Text> : null}
+      {saveError ? (
+        <Text accessibilityRole="alert" style={styles.error}>
+          {saveError}
+        </Text>
+      ) : null}
       {failedHosts.length > 0 ? (
         <Text style={styles.error}>
           {failedHosts.join(", ")} unreachable, showing the remaining hosts
